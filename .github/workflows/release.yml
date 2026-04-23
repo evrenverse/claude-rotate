@@ -1,0 +1,85 @@
+# .github/workflows/release.yml
+#
+# Triggered by pushing an annotated tag like ``v0.2.0``. Always creates a
+# GitHub Release with auto-generated notes; also publishes to PyPI when
+# Trusted Publishing is configured on the ``pypi`` environment (if not,
+# that step is skipped cleanly instead of failing the workflow).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write        # required to create GitHub Releases
+  id-token: write        # required for PyPI Trusted Publishing
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # full history for auto-generated notes
+
+      - name: Derive version from tag
+        id: meta
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Build wheel and sdist
+        run: uv build
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+  github_release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          files: dist/*
+          fail_on_unmatched_files: false
+
+  pypi_publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    # Only runs when the maintainer has configured Trusted Publishing on
+    # pypi.org and created a ``pypi`` environment on the repo. If either
+    # piece is missing the job is skipped instead of failing the release.
+    if: ${{ vars.PYPI_ENABLED == 'true' }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Upload to PyPI via Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
