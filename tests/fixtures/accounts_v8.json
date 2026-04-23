@@ -1,0 +1,20 @@
+{
+  "version": 8,
+  "accounts": {
+    "main": {
+      "created_at": "2026-04-23T07:47:00Z",
+      "email": "main@example.com",
+      "label": "Max-20 main",
+      "metadata_refreshed_at": "2026-04-23T07:47:00Z",
+      "pinned": false,
+      "plan": "max_20x",
+      "refresh_token": "sk-ant-ort01-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "refresh_token_obtained_at": "2026-04-23T07:47:00Z",
+      "runtime_token": "sk-ant-oat01-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+      "runtime_token_obtained_at": "2026-04-23T07:47:00Z",
+      "subscription_expires_at": "2026-05-07T19:13:30Z",
+      "subscription_expires_at_manual": null,
+      "subscription_status": "active"
+    }
+  }
+}

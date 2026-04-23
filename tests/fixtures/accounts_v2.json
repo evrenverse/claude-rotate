@@ -1,0 +1,33 @@
+{
+  "version": 2,
+  "accounts": {
+    "main": {
+      "runtime_token": "sk-ant-oat01-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "runtime_token_expires_at": "2027-01-01T00:00:00Z",
+      "label": "Max-20 main",
+      "created_at": "2026-01-01T00:00:00Z",
+      "plan": "max_20x",
+      "access_token": "sk-ant-oat01-aaa-access...",
+      "access_token_expires_at": "2026-04-22T16:00:00Z",
+      "refresh_token": "sk-ant-ort01-aaa-refresh...",
+      "email": "main@example.com",
+      "subscription_expires_at": null,
+      "pinned": false,
+      "metadata_refreshed_at": "2026-04-22T00:00:00Z"
+    },
+    "backup": {
+      "runtime_token": "sk-ant-oat01-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "runtime_token_expires_at": "2027-02-01T00:00:00Z",
+      "label": "Max-5 backup",
+      "created_at": "2026-02-01T00:00:00Z",
+      "plan": "max_5x",
+      "access_token": null,
+      "access_token_expires_at": null,
+      "refresh_token": null,
+      "email": "backup@example.com",
+      "subscription_expires_at": "2026-05-30T23:59:59Z",
+      "pinned": false,
+      "metadata_refreshed_at": "2026-04-20T00:00:00Z"
+    }
+  }
+}
