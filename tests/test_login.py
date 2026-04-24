@@ -397,6 +397,51 @@ def test_do_login_interactive_existing_account_without_replace(tmp_path) -> None
         )
 
 
+def test_do_login_interactive_replace_drops_other_handle_with_same_email(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """--replace identity is the EMAIL, not the handle. A renamed account
+    whose email matches the login target must be dropped, otherwise the
+    user ends up with two handles pointing at one subscription."""
+    from claude_rotate.accounts import Account, Store
+    from claude_rotate.login import do_login_interactive
+
+    paths = _make_paths(tmp_path)
+    existing = Account(
+        name="work",
+        runtime_token="sk-ant-oat01-OLD" + "x" * 93,
+        label="work",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        plan="max_20x",
+        email="user@example.com",
+    )
+    Store(paths).save({"work": existing})
+
+    pair = _make_token_pair()
+    profile = _make_profile(email="user@example.com")
+
+    with (
+        patch("claude_rotate.login.exchange_code", return_value=pair),
+        patch("claude_rotate.login.fetch_profile", return_value=profile),
+        patch("claude_rotate.login.webbrowser.open"),
+        patch("claude_rotate.login._new_callback_event", side_effect=_ImmediateEvent),
+        patch("claude_rotate.login._prompt_manual_expiry", return_value=None),
+        _patch_pkce(),
+        _patch_tcp_server(),
+    ):
+        do_login_interactive(
+            paths=paths,
+            email="user@example.com",
+            claude_bin="",
+            name="grace",
+            replace=True,
+            skip_repeat_warning=True,
+        )
+
+    stored = Store(paths).load()
+    assert "work" not in stored  # renamed handle dropped (email collision)
+    assert "grace" in stored
+    assert stored["grace"].email == "user@example.com"
+
+
 # ---------------------------------------------------------------------------
 # do_login_from_env / do_login_from_file (non-interactive, CI path)
 # ---------------------------------------------------------------------------
