@@ -21,13 +21,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from claude_rotate.config import Paths
-from claude_rotate.sync import reconcile_all, refresh_stale_accounts
+from claude_rotate.sync import reconcile_all, refresh_stale_tokens
 
 
 def execute(paths: Paths) -> int:
     now = datetime.now(UTC)
     synced = reconcile_all(paths, now=now)
-    refreshed = refresh_stale_accounts(paths, now=now)
+    refreshed = refresh_stale_tokens(paths, now=now)
 
     if synced or refreshed:
         stamp = datetime.now(UTC).isoformat(timespec="seconds")

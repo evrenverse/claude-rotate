@@ -125,7 +125,7 @@ def reconcile_all(paths: Paths, *, now: datetime) -> bool:
     return reconcile_once(payload, paths, now=now)
 
 
-def refresh_stale_accounts(paths: Paths, *, now: datetime) -> list[str]:
+def refresh_stale_tokens(paths: Paths, *, now: datetime) -> list[str]:
     """Proactively refresh any OAuth account whose access token is stale.
 
     Without this, the rotator only refreshes the account a user actively

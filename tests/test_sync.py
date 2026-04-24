@@ -133,20 +133,20 @@ def test_reconcile_skips_when_account_deleted(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# refresh_stale_accounts — proactive token refresh during idle periods
+# refresh_stale_tokens — proactive token refresh during idle periods
 # ---------------------------------------------------------------------------
 
 
 def test_refresh_stale_skips_fresh_account(tmp_path) -> None:
     from unittest.mock import patch
 
-    from claude_rotate.sync import refresh_stale_accounts
+    from claude_rotate.sync import refresh_stale_tokens
 
     p = _paths(tmp_path)
     Store(p).save({"sub1": _acc()})  # runtime_token_obtained_at = NOW - 1h → fresh
 
     with patch("claude_rotate.sync.refresh_access_token") as mock_refresh:
-        refreshed = refresh_stale_accounts(p, now=NOW)
+        refreshed = refresh_stale_tokens(p, now=NOW)
 
     mock_refresh.assert_not_called()
     assert refreshed == []
@@ -156,7 +156,7 @@ def test_refresh_stale_refreshes_stale_account_and_updates_store(tmp_path) -> No
     from unittest.mock import patch
 
     from claude_rotate.oauth import TokenPair
-    from claude_rotate.sync import refresh_stale_accounts
+    from claude_rotate.sync import refresh_stale_tokens
 
     p = _paths(tmp_path)
     stale = Account(
@@ -179,7 +179,7 @@ def test_refresh_stale_refreshes_stale_account_and_updates_store(tmp_path) -> No
         obtained_at=NOW,
     )
     with patch("claude_rotate.sync.refresh_access_token", return_value=new_pair):
-        refreshed = refresh_stale_accounts(p, now=NOW)
+        refreshed = refresh_stale_tokens(p, now=NOW)
 
     assert refreshed == ["sub1"]
     reloaded = Store(p).load()["sub1"]
@@ -192,7 +192,7 @@ def test_refresh_stale_refreshes_stale_account_and_updates_store(tmp_path) -> No
 def test_refresh_stale_skips_ci_accounts(tmp_path) -> None:
     from unittest.mock import patch
 
-    from claude_rotate.sync import refresh_stale_accounts
+    from claude_rotate.sync import refresh_stale_tokens
 
     p = _paths(tmp_path)
     ci = Account(
@@ -208,7 +208,7 @@ def test_refresh_stale_skips_ci_accounts(tmp_path) -> None:
     Store(p).save({"ci": ci})
 
     with patch("claude_rotate.sync.refresh_access_token") as mock_refresh:
-        refreshed = refresh_stale_accounts(p, now=NOW)
+        refreshed = refresh_stale_tokens(p, now=NOW)
 
     mock_refresh.assert_not_called()
     assert refreshed == []
@@ -220,7 +220,7 @@ def test_refresh_stale_swallows_errors_per_account(tmp_path) -> None:
 
     from claude_rotate.errors import ClaudeRotateError
     from claude_rotate.oauth import TokenPair
-    from claude_rotate.sync import refresh_stale_accounts
+    from claude_rotate.sync import refresh_stale_tokens
 
     p = _paths(tmp_path)
     stale_a = Account(
@@ -259,7 +259,7 @@ def test_refresh_stale_swallows_errors_per_account(tmp_path) -> None:
         return new_pair
 
     with patch("claude_rotate.sync.refresh_access_token", side_effect=fake_refresh):
-        refreshed = refresh_stale_accounts(p, now=NOW)
+        refreshed = refresh_stale_tokens(p, now=NOW)
 
     assert refreshed == ["b"]
     loaded = Store(p).load()
@@ -277,7 +277,7 @@ def test_refresh_stale_rewrites_credentials_json_for_active_session(tmp_path, mo
     from unittest.mock import patch
 
     from claude_rotate.oauth import TokenPair
-    from claude_rotate.sync import refresh_stale_accounts
+    from claude_rotate.sync import refresh_stale_tokens
 
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
@@ -305,7 +305,7 @@ def test_refresh_stale_rewrites_credentials_json_for_active_session(tmp_path, mo
         obtained_at=NOW,
     )
     with patch("claude_rotate.sync.refresh_access_token", return_value=new_pair):
-        refreshed = refresh_stale_accounts(p, now=NOW)
+        refreshed = refresh_stale_tokens(p, now=NOW)
 
     assert refreshed == ["sub1"]
     creds_path = home / ".claude" / ".credentials.json"
