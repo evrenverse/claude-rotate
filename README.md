@@ -18,6 +18,8 @@
 Built for developers and AI agents that burn through a single Max plan before lunch and want to keep working against Claude Code without hitting the 5-hour wall.
 
 > **Keywords:** claude code rotator · multi-account claude · claude max rotation · anthropic oauth · claude rate-limit workaround · claude subscription manager · claude-code cli
+>
+> **Also searched as:** claude account switcher · claude 5-hour limit · claude weekly quota tool · claude max rate limit · claude-code multi-login · claude account manager · claude quota tracker · anthropic multi-account cli · claude pro pooling · rotate claude subscriptions
 
 ## 🤖 LLM Quickstart
 
