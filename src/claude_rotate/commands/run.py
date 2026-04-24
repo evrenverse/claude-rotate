@@ -23,7 +23,7 @@ from claude_rotate.probe import ProbeResult, probe_many
 from claude_rotate.refresh import ensure_fresh
 from claude_rotate.selection import Candidate, is_usable, pick_best
 from claude_rotate.state_log import StateLog
-from claude_rotate.sync import reconcile_all
+from claude_rotate.sync import reconcile_all, refresh_stale_tokens
 from claude_rotate.usage_cache import UsageCache
 
 
@@ -42,6 +42,19 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     if not accounts:
         _print_no_accounts_message()
         return 3
+
+    # Proactively refresh any account whose access token is stale BEFORE
+    # we probe. Without this the probe hits Anthropic with a dead token,
+    # the dashboard flags the account as 'relogin', and — even though a
+    # later ensure_fresh in the chosen-account path would have recovered
+    # — the child claude boots with whatever we could refresh (or not)
+    # and may show the dreaded login prompt. Refreshing up-front keeps
+    # every account usable and the dashboard honest.
+    with contextlib.suppress(Exception):
+        refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC))
+        if refreshed:
+            # accounts.json was rewritten — reload so probe sees fresh tokens
+            accounts = store.load()
 
     # Probe every account so the dashboard is always complete — pinning
     # only constrains the selection pool, not what the user sees.
