@@ -409,10 +409,23 @@ def do_login_interactive(
     # dashboard display + selection instead of the API-derived anchor.
     sub_expires_manual = _prompt_manual_expiry()
 
-    # Duplicate-name guard
+    # Duplicate-name guard + email-based replace
     current = store.load()
     if name in current and not replace:
         raise AccountError(f"account {name!r} already exists. Use --replace to overwrite.")
+    if replace:
+        # --replace semantics: identity is the email, not the handle.
+        # Remove any existing account with a matching email (under ANY handle)
+        # before writing the new one. Prevents the "same email, two handles"
+        # state after a rename + re-login round-trip.
+        for existing_name, existing_acct in list(current.items()):
+            if (
+                existing_acct.email
+                and existing_acct.email.lower() == resolved_email.lower()
+                and existing_name != name
+            ):
+                _print(f"  --replace: dropping stale handle {existing_name!r} (same email)")
+                del current[existing_name]
 
     now = datetime.now(UTC)
     plan = profile.plan if profile.plan != "unknown" else "max_20x"
