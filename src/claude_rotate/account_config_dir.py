@@ -12,6 +12,7 @@ in-place through the symlink, so the links survive.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
@@ -19,10 +20,29 @@ from pathlib import Path
 from claude_rotate.config import Paths
 
 _CREDENTIALS_PREFIX = ".credentials.json"
+_DIVERGED_PREFIX = ".diverged-"
+_DIVERGED_MAX_AGE_DAYS = 7
 
 
 def home_claude_dir() -> Path:
     return Path(os.environ.get("HOME", str(Path.home()))) / ".claude"
+
+
+def _prune_diverged(target: Path, *, now: float, max_age_days: int = _DIVERGED_MAX_AGE_DAYS) -> None:
+    """Drop self-heal backups (``.diverged-<name>-<ts>``) older than the cutoff.
+
+    Divergence is rare, but without this the backups would accumulate forever.
+    Mirrors ``CredentialsFile.prune_backups``: parse the trailing unix-ts segment.
+    """
+    threshold = now - max_age_days * 86400
+    for p in target.glob(f"{_DIVERGED_PREFIX}*"):
+        try:
+            ts = int(p.name.rsplit("-", 1)[1])
+        except (ValueError, IndexError):
+            continue
+        if ts < threshold:
+            with contextlib.suppress(OSError):
+                p.unlink()
 
 
 def ensure_account_config_dir(paths: Paths, account_name: str, *, home_claude: Path) -> Path:
@@ -62,4 +82,5 @@ def ensure_account_config_dir(paths: Paths, account_name: str, *, home_claude: P
             link.rename(target / f".diverged-{name}-{int(time.time())}")
         link.symlink_to(src)
 
+    _prune_diverged(target, now=time.time())
     return target
