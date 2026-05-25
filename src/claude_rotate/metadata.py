@@ -1,7 +1,7 @@
 """Background metadata refresh.
 
 Every run checks whether any account's metadata is older than
-METADATA_REFRESH_DAYS and, if so, probes the usage endpoint to confirm
+METADATA_REFRESH_DAYS and, if so, probes quota headers to confirm
 the token still works. Failures are silently logged — the refresh must never
 block the primary run path.
 

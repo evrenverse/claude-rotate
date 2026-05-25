@@ -84,10 +84,9 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                     )
                 )
                 continue
-            # 429 on /oauth/usage is an API rate-limit on the *probe*
-            # endpoint, not a subscription-quota exhaustion. The account
-            # itself may still be fully usable. Fall back to cached usage
-            # values and keep the candidate in the selection pool.
+            # A 429 without rate-limit headers is a probe failure, not
+            # trustworthy quota data. Fall back to cached usage values and
+            # keep the candidate in the selection pool.
             if err == "rate_limited":
                 cached = cache.load(c.account.name)
                 if cached is not None:

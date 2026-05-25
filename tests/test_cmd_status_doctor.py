@@ -133,9 +133,9 @@ def test_status_exits_0_when_all_accounts_rate_limited(tmp_path) -> None:
 def test_status_rate_limited_without_cache_shows_no_data(tmp_path, capsys) -> None:
     """rate_limited probe with no cached usage → no_data row explaining why.
 
-    A 429 on ``/oauth/usage`` is an API rate-limit on the probe endpoint,
-    not a subscription-quota exhaustion. Without cached usage numbers we
-    cannot reason about the account and surface that honestly.
+    A 429 without usable rate-limit headers gives us no trustworthy quota
+    data. Without cached usage numbers we cannot reason about the account
+    and surface that honestly.
     """
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)

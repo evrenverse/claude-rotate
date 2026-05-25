@@ -112,6 +112,7 @@ def test_exec_claude_writes_credentials_and_unsets_env(tmp_path, monkeypatch) ->
 
     # Child env does NOT contain CLAUDE_CODE_OAUTH_TOKEN
     assert "CLAUDE_CODE_OAUTH_TOKEN" not in captured["env"]  # type: ignore[operator]
+    assert captured["env"]["CLAUDE_ROTATE_GUARD"] == "1"  # type: ignore[index]
     # Parent env untouched
     assert os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") == "sk-ant-oat01-AMBIENT"
 

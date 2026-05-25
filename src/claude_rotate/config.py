@@ -35,11 +35,9 @@ METADATA_REFRESH_DAYS = 7
 STALE_METADATA_WARN_DAYS = 10
 
 # HTTP
-# Legacy inference URL — no longer used by the probe layer (replaced by USAGE_URL)
-# but kept here so any external code that imported it doesn't break immediately.
 INFERENCE_URL = "https://api.anthropic.com/v1/messages"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
-# User-Agent for api.anthropic.com endpoints (/oauth/usage, /oauth/profile).
+# User-Agent for api.anthropic.com endpoints (/v1/messages, /oauth/profile).
 # These sit behind Cloudflare which rejects unfamiliar UAs with error 1010 —
 # masquerading as Claude Code itself is safe here and was the approach the
 # old Bash rotator used successfully.
