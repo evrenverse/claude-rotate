@@ -134,3 +134,15 @@ def test_cleanup_does_not_touch_home_claude(tmp_path: Path) -> None:
 
     assert sibling.exists()
     assert (sibling / "keep_me.txt").read_text() == "don't delete"
+
+
+def test_cleanup_removes_isolation_artifacts(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.config_dir.mkdir(parents=True, exist_ok=True)
+    paths.config_file.write_text('{"session_isolation": true}\n')
+    (paths.account_configs_dir / "matri").mkdir(parents=True)
+    (paths.account_configs_dir / "matri" / ".credentials.json").write_text("{}\n")
+
+    assert cleanup.execute(paths, assume_yes=True) == 0
+    assert not paths.config_file.exists()
+    assert not paths.account_configs_dir.exists()
