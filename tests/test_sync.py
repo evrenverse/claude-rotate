@@ -4,11 +4,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from claude_rotate.accounts import Account, Store
-from claude_rotate.config import Paths
-from claude_rotate.credentials_file import CredentialsPayload
+from claude_rotate.config import Paths, paths
+from claude_rotate.credentials_file import CredentialsPayload, write_credentials
 from claude_rotate.sync import (
     CurrentSession,
     read_current_session,
+    reconcile_isolated,
     reconcile_once,
     write_current_session,
 )
@@ -313,3 +314,67 @@ def test_refresh_stale_rewrites_credentials_json_for_active_session(tmp_path, mo
     creds = _json.loads(creds_path.read_text())
     assert creds["claudeAiOauth"]["accessToken"] == new_pair.access_token
     assert creds["claudeAiOauth"]["refreshToken"] == new_pair.refresh_token
+
+
+# ---------------------------------------------------------------------------
+# reconcile_isolated — sync per-account dirs back to accounts.json
+# ---------------------------------------------------------------------------
+
+
+def _seed_account(p: Paths, name: str, token: str) -> None:
+    store = Store(p)
+    accts = store.load()
+    accts[name] = Account(
+        name=name,
+        runtime_token=token,
+        label=name,
+        created_at=datetime(2026, 4, 23, tzinfo=UTC),
+        plan="max_20x",
+        refresh_token="sk-ant-ort01-OLD",
+        runtime_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
+        refresh_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
+    )
+    store.save(accts)
+
+
+def test_reconcile_isolated_picks_up_rotated_token(rotate_dir: Path) -> None:
+    p = paths()
+    _seed_account(p, "matri", "sk-ant-oat01-OLD")
+    cfg_dir = p.account_configs_dir / "matri"
+    cfg_dir.mkdir(parents=True)
+    write_credentials(
+        CredentialsPayload(
+            access_token="sk-ant-oat01-NEW",
+            refresh_token="sk-ant-ort01-NEW",
+            expires_at_ms=1_700_000_000_000,
+            scopes=["user:inference"],
+            subscription_type="max",
+            rate_limit_tier=None,
+        ),
+        config_dir=cfg_dir,
+    )
+
+    changed = reconcile_isolated(p, now=datetime(2026, 5, 25, tzinfo=UTC))
+    assert changed == ["matri"]
+    acct = Store(p).load()["matri"]
+    assert acct.runtime_token == "sk-ant-oat01-NEW"
+    assert acct.refresh_token == "sk-ant-ort01-NEW"
+
+
+def test_reconcile_isolated_noop_when_unchanged(rotate_dir: Path) -> None:
+    p = paths()
+    _seed_account(p, "matri", "sk-ant-oat01-SAME")
+    cfg_dir = p.account_configs_dir / "matri"
+    cfg_dir.mkdir(parents=True)
+    write_credentials(
+        CredentialsPayload(
+            access_token="sk-ant-oat01-SAME",
+            refresh_token="sk-ant-ort01-OLD",
+            expires_at_ms=1_700_000_000_000,
+            scopes=["user:inference"],
+            subscription_type="max",
+            rate_limit_tier=None,
+        ),
+        config_dir=cfg_dir,
+    )
+    assert reconcile_isolated(p, now=datetime(2026, 5, 25, tzinfo=UTC)) == []
