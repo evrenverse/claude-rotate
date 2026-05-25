@@ -21,11 +21,17 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from claude_rotate.config import Paths
-from claude_rotate.sync import reconcile_all, refresh_stale_tokens
+from claude_rotate.settings import load_config
+from claude_rotate.sync import reconcile_all, reconcile_isolated, refresh_stale_tokens
 
 
 def execute(paths: Paths) -> int:
     now = datetime.now(UTC)
+
+    if load_config(paths).session_isolation:
+        reconcile_isolated(paths, now=now)
+        return 0
+
     synced = reconcile_all(paths, now=now)
     refreshed = refresh_stale_tokens(paths, now=now)
 

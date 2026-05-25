@@ -72,3 +72,36 @@ def test_sync_credentials_updates_accounts_json(tmp_path, monkeypatch) -> None:
     reloaded = Store(p).load()["sub1"]
     assert reloaded.runtime_token.startswith("sk-ant-oat01-NEW")
     assert reloaded.refresh_token.startswith("sk-ant-ort01-NEW")
+
+
+def test_sync_credentials_isolated_path(rotate_dir: Path) -> None:
+    from datetime import UTC, datetime
+
+    from claude_rotate.accounts import Account, Store
+    from claude_rotate.commands import sync_credentials
+    from claude_rotate.config import paths
+    from claude_rotate.credentials_file import CredentialsPayload, write_credentials
+    from claude_rotate.settings import RotateConfig, save_config
+
+    p = paths()
+    save_config(p, RotateConfig(session_isolation=True))
+    store = Store(p)
+    store.save({
+        "matri": Account(
+            name="matri", runtime_token="sk-ant-oat01-OLD", label="matri",
+            created_at=datetime(2026, 4, 23, tzinfo=UTC), plan="max_20x",
+            refresh_token="r-OLD",
+            runtime_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
+            refresh_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
+        )
+    })
+    cfg_dir = p.account_configs_dir / "matri"
+    cfg_dir.mkdir(parents=True)
+    write_credentials(
+        CredentialsPayload("sk-ant-oat01-NEW", "r-NEW", 1_700_000_000_000,
+                           ["user:inference"], "max", None),
+        config_dir=cfg_dir,
+    )
+
+    assert sync_credentials.execute(p) == 0
+    assert Store(p).load()["matri"].runtime_token == "sk-ant-oat01-NEW"
