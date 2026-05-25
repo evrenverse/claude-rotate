@@ -1,6 +1,8 @@
 """`claude-rotate config get|set` — read/write feature toggles in config.json."""
 from __future__ import annotations
 
+import sys
+
 from claude_rotate.config import Paths
 from claude_rotate.settings import RotateConfig, load_config, set_value
 
@@ -22,18 +24,18 @@ def execute(paths: Paths, action: str, key: str | None, value: str | None) -> in
                 print(f"{k} = {_fmt(v)}")
             return 0
         if key not in data:
-            print(f"error: unknown config key {key!r}", file=__import__("sys").stderr)
+            print(f"error: unknown config key {key!r}", file=sys.stderr)
             return 1
         print(_fmt(data[key]))
         return 0
     if action == "set":
         if key is None or value is None:
-            print("usage: claude-rotate config set <key> <value>", file=__import__("sys").stderr)
+            print("usage: claude-rotate config set <key> <value>", file=sys.stderr)
             return 2
         set_value(paths, key, value)
         print(f"{key} = {value}")
         return 0
-    print(f"error: unknown config action {action!r}", file=__import__("sys").stderr)
+    print(f"error: unknown config action {action!r}", file=sys.stderr)
     return 2
 
 
