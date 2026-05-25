@@ -88,26 +88,31 @@ def build_credentials_payload(account: Account, *, now: datetime) -> Credentials
 def exec_claude(account: Account, paths: Paths, args: list[str]) -> int:
     """Replace the current process with `claude`.
 
-    Writes ~/.claude/.credentials.json with the account's tokens, records
-    the session breadcrumb AFTER the credentials write (so cron never sees
-    a mismatched pair), strips CLAUDE_CODE_OAUTH_TOKEN from the child env,
-    and execvpe's.
-
-    Returns only on error (os.execvpe never returns on success).
+    Default: writes ~/.claude/.credentials.json (global) and execs.
+    With session_isolation on (config.json): writes the account's credentials
+    into a per-account symlink-mirror config dir and points CLAUDE_CONFIG_DIR
+    at it, so parallel sessions on different accounts never clobber each other.
     """
+    from claude_rotate.account_config_dir import ensure_account_config_dir, home_claude_dir
+    from claude_rotate.settings import load_config
+
     claude_bin = resolve_claude_binary()
+    cfg = load_config(paths)
     payload = build_credentials_payload(account, now=datetime.now(UTC))
-    # Order is load-bearing: credentials first, breadcrumb second. Between
-    # these two writes the cron would see stale session+new creds, which
-    # is harmless (it checks account existence first). The reverse order
-    # would let cron write the stale creds into the new account's slot.
-    write_credentials(payload)
-    write_current_session(paths, CurrentSession(account_name=account.name))
 
     env = dict(os.environ)
     env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-    # Ensure child inherits no stale CLAUDE_CONFIG_DIR pointing at a shadow home
     env.pop("CLAUDE_CONFIG_DIR", None)
+
+    if cfg.session_isolation:
+        cfg_dir = ensure_account_config_dir(paths, account.name, home_claude=home_claude_dir())
+        write_credentials(payload, config_dir=cfg_dir)
+        env["CLAUDE_CONFIG_DIR"] = str(cfg_dir)
+    else:
+        write_credentials(payload)
+
+    # Breadcrumb still records the active account for the global-file reconcile path.
+    write_current_session(paths, CurrentSession(account_name=account.name))
 
     os.execvpe(claude_bin, [claude_bin, *args], env)
     return 1  # unreachable
