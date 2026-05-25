@@ -59,3 +59,18 @@ def test_self_heals_diverged_real_file(rotate_dir: Path, tmp_path: Path) -> None
     assert (target / "settings.json").is_symlink()
     assert (target / "settings.json").readlink() == hc / "settings.json"
     assert any(p.name.startswith(".diverged-settings.json-") for p in target.iterdir())
+
+
+def test_prunes_old_diverged_backups(rotate_dir: Path, tmp_path: Path) -> None:
+    import time as _time
+
+    hc = _fake_home_claude(tmp_path / "home")
+    target = ensure_account_config_dir(paths(), "matri", home_claude=hc)
+    old = target / ".diverged-settings.json-1000"  # ts 1000 -> 1970, ancient
+    old.write_text("x")
+    recent = target / f".diverged-foo-{int(_time.time())}"  # now -> kept
+    recent.write_text("x")
+
+    ensure_account_config_dir(paths(), "matri", home_claude=hc)
+    assert not old.exists()  # pruned (> 7 days old)
+    assert recent.exists()  # within window, kept
