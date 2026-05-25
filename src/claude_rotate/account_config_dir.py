@@ -28,13 +28,13 @@ def home_claude_dir() -> Path:
     return Path(os.environ.get("HOME", str(Path.home()))) / ".claude"
 
 
-def _prune_diverged(target: Path, *, now: float, max_age_days: int = _DIVERGED_MAX_AGE_DAYS) -> None:
+def _prune_diverged(target: Path, *, now: float) -> None:
     """Drop self-heal backups (``.diverged-<name>-<ts>``) older than the cutoff.
 
     Divergence is rare, but without this the backups would accumulate forever.
     Mirrors ``CredentialsFile.prune_backups``: parse the trailing unix-ts segment.
     """
-    threshold = now - max_age_days * 86400
+    threshold = now - _DIVERGED_MAX_AGE_DAYS * 86400
     for p in target.glob(f"{_DIVERGED_PREFIX}*"):
         try:
             ts = int(p.name.rsplit("-", 1)[1])
