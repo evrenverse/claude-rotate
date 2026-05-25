@@ -143,3 +143,81 @@ def test_resolve_claude_binary_missing_raises(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("PATH", str(empty))
     with pytest.raises(ClaudeBinaryError, match="not found"):
         resolve_claude_binary()
+
+
+def test_exec_claude_isolated_sets_config_dir(tmp_path, monkeypatch) -> None:
+    from claude_rotate.config import Paths
+    from claude_rotate.settings import RotateConfig, save_config
+
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / ".claude" / "projects").mkdir()
+    (home / ".claude" / ".credentials.json").write_text('{"claudeAiOauth": {}}\n')
+    monkeypatch.setenv("HOME", str(home))
+
+    fake_bin_dir = tmp_path / "bin"
+    fake_bin_dir.mkdir()
+    (fake_bin_dir / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (fake_bin_dir / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin_dir))
+
+    paths = Paths(
+        config_dir=tmp_path / "cfg",
+        cache_dir=tmp_path / "cache",
+        state_dir=tmp_path / "state",
+    )
+    paths.state_dir.mkdir(parents=True)
+    paths.config_dir.mkdir(parents=True)
+    save_config(paths, RotateConfig(session_isolation=True))
+
+    captured: dict[str, object] = {}
+
+    def _fake_execvpe(file, args, env):
+        captured["env"] = dict(env)
+        raise SystemExit(0)
+
+    with (
+        patch("claude_rotate.exec.os.execvpe", side_effect=_fake_execvpe),
+        pytest.raises(SystemExit),
+    ):
+        exec_claude(_acc(), paths, ["hi"])
+
+    expected_dir = paths.account_configs_dir / "main"
+    assert captured["env"]["CLAUDE_CONFIG_DIR"] == str(expected_dir)  # type: ignore[index]
+    creds = json.loads((expected_dir / ".credentials.json").read_text())
+    assert creds["claudeAiOauth"]["accessToken"].startswith("sk-ant-oat01-aaaa")
+    glob = json.loads((home / ".claude" / ".credentials.json").read_text())
+    assert glob == {"claudeAiOauth": {}}
+
+
+def test_exec_claude_non_isolated_writes_global(tmp_path, monkeypatch) -> None:
+    """Default (isolation off): behave exactly as before — write ~/.claude/.credentials.json."""
+    from claude_rotate.config import Paths
+
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    fake_bin_dir = tmp_path / "bin"
+    fake_bin_dir.mkdir()
+    (fake_bin_dir / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (fake_bin_dir / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin_dir))
+    paths = Paths(
+        config_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache", state_dir=tmp_path / "state"
+    )
+    paths.state_dir.mkdir(parents=True)
+
+    captured: dict[str, object] = {}
+
+    def _fake_execvpe(file, args, env):
+        captured["env"] = dict(env)
+        raise SystemExit(0)
+
+    with (
+        patch("claude_rotate.exec.os.execvpe", side_effect=_fake_execvpe),
+        pytest.raises(SystemExit),
+    ):
+        exec_claude(_acc(), paths, ["hi"])
+
+    assert "CLAUDE_CONFIG_DIR" not in captured["env"]  # type: ignore[operator]
+    assert (home / ".claude" / ".credentials.json").exists()
