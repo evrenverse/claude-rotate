@@ -165,7 +165,7 @@ def reconcile_isolated(paths: Paths, *, now: datetime) -> list[str]:
     return changed
 
 
-def refresh_stale_tokens(paths: Paths, *, now: datetime) -> list[str]:
+def refresh_stale_tokens(paths: Paths, *, now: datetime, isolated: bool = False) -> list[str]:
     """Proactively refresh any OAuth account whose access token is stale.
 
     Without this, the rotator only refreshes the account a user actively
@@ -211,14 +211,30 @@ def refresh_stale_tokens(paths: Paths, *, now: datetime) -> list[str]:
 
     store.save(accounts)
 
-    # Keep .credentials.json in lockstep with the current session so a
-    # running claude (or the next pre-run reconcile) sees our fresh tokens
-    # and doesn't roll them back with the now-stale copy on disk.
-    session = read_current_session(paths)
-    if session and session.account_name in refreshed:
-        active = accounts[session.account_name]
-        # best-effort; accounts.json is still the source of truth
-        with contextlib.suppress(OSError):
-            write_credentials(build_credentials_payload(active, now=now))
+    if isolated:
+        # Isolation mode: push each refreshed account's fresh token into its own
+        # configs/<name>/.credentials.json (when that dir exists). A running
+        # isolated session re-reads its credentials file every turn, so it picks
+        # the fresh token up, and the next run starts fresh too. Never write the
+        # global file in this mode.
+        base = paths.account_configs_dir
+        for name in refreshed:
+            cfg_dir = base / name
+            if cfg_dir.is_dir():
+                with contextlib.suppress(OSError):
+                    write_credentials(
+                        build_credentials_payload(accounts[name], now=now),
+                        config_dir=cfg_dir,
+                    )
+    else:
+        # Keep ~/.claude/.credentials.json in lockstep with the current session
+        # so a running claude (or the next pre-run reconcile) sees the fresh
+        # tokens and doesn't roll them back with the now-stale copy on disk.
+        session = read_current_session(paths)
+        if session and session.account_name in refreshed:
+            active = accounts[session.account_name]
+            # best-effort; accounts.json is still the source of truth
+            with contextlib.suppress(OSError):
+                write_credentials(build_credentials_payload(active, now=now))
 
     return refreshed

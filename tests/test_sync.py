@@ -378,3 +378,41 @@ def test_reconcile_isolated_noop_when_unchanged(rotate_dir: Path) -> None:
         config_dir=cfg_dir,
     )
     assert reconcile_isolated(p, now=datetime(2026, 5, 25, tzinfo=UTC)) == []
+
+
+def test_refresh_stale_tokens_isolated_writes_config_dir(rotate_dir: Path) -> None:
+    """Isolation mode: a stale idle account is refreshed into its own config dir."""
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from claude_rotate.credentials_file import CredentialsFile
+    from claude_rotate.sync import refresh_stale_tokens
+
+    p = paths()
+    old = datetime(2026, 1, 1, tzinfo=UTC)
+    Store(p).save(
+        {
+            "matri": Account(
+                name="matri",
+                runtime_token="oat-OLD",
+                label="matri",
+                created_at=old,
+                plan="max_20x",
+                refresh_token="ort-OLD",
+                runtime_token_obtained_at=old,
+                refresh_token_obtained_at=old,
+            )
+        }
+    )
+    cfg_dir = p.account_configs_dir / "matri"
+    cfg_dir.mkdir(parents=True)
+
+    fake = SimpleNamespace(access_token="oat-NEW", refresh_token="ort-NEW")
+    with patch("claude_rotate.sync.refresh_access_token", return_value=fake):
+        refreshed = refresh_stale_tokens(p, now=datetime(2026, 5, 25, tzinfo=UTC), isolated=True)
+
+    assert refreshed == ["matri"]
+    assert Store(p).load()["matri"].runtime_token == "oat-NEW"
+    written = CredentialsFile(cfg_dir).read()
+    assert written is not None
+    assert written.access_token == "oat-NEW"
