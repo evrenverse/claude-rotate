@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import json as _json
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from claude_rotate.credentials_file import (
     CredentialsFile,
     CredentialsPayload,
     read_credentials,
+    write_credentials,
 )
 
 FIXTURE_FULL = Path(__file__).parent / "fixtures" / "credentials_full_scope.json"
@@ -180,3 +182,20 @@ def test_prune_backups_older_than_7_days(tmp_path, monkeypatch) -> None:
 
     assert not old.exists()
     assert recent.exists()
+
+
+def test_write_credentials_to_explicit_dir(tmp_path: Path) -> None:
+    target_dir = tmp_path / "configs" / "matri"
+    target_dir.mkdir(parents=True)
+    payload = CredentialsPayload(
+        access_token="sk-ant-oat01-AAA",
+        refresh_token="sk-ant-ort01-BBB",
+        expires_at_ms=1_700_000_000_000,
+        scopes=["user:inference"],
+        subscription_type="max",
+        rate_limit_tier="default_claude_max_20x",
+    )
+    write_credentials(payload, config_dir=target_dir)
+    written = _json.loads((target_dir / ".credentials.json").read_text())
+    assert written["claudeAiOauth"]["accessToken"] == "sk-ant-oat01-AAA"
+    assert ((target_dir / ".credentials.json").stat().st_mode & 0o777) == 0o600
