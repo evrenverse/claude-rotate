@@ -80,6 +80,10 @@ class Paths:
         return self.config_dir / "config.json"
 
     @property
+    def account_configs_dir(self) -> Path:
+        return self.config_dir / "configs"
+
+    @property
     def current_session_file(self) -> Path:
         return self.state_dir / "current-session.json"
 
