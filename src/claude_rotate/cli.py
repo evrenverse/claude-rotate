@@ -23,6 +23,7 @@ ROTATOR_COMMANDS = {
     "cleanup",
     "sync-credentials",
     "install-sync",
+    "config",
 }
 ROTATOR_ROOT_FLAGS = {"--version", "-V", "--help", "-h"}
 
@@ -381,6 +382,18 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_install.add_argument("--uninstall", action="store_true", help=_SUPPRESS)
     sp_install.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
+    # config — feature toggles in config.json
+    sp_config = sub.add_parser(
+        "config",
+        help="Get/set feature toggles (session_isolation, auto_resume.*)",
+        usage="claude-rotate config <get|set> [<key>] [<value>]",
+        formatter_class=fmt,
+        add_help=True,
+    )
+    sp_config.add_argument("action", choices=["get", "set"])
+    sp_config.add_argument("key", nargs="?", default=None)
+    sp_config.add_argument("value", nargs="?", default=None)
+
     return p
 
 
@@ -457,6 +470,10 @@ def main(argv: list[str] | None = None) -> int:
             from claude_rotate.commands import install_sync
 
             return install_sync.execute(p, uninstall=args.uninstall)
+        if args.command == "config":
+            from claude_rotate.commands import config as config_cmd
+
+            return config_cmd.execute(p, args.action, args.key, args.value)
     except ClaudeRotateError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
