@@ -56,7 +56,10 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     # and may show the dreaded login prompt. Refreshing up-front keeps
     # every account usable and the dashboard honest.
     with contextlib.suppress(Exception):
-        refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC))
+        from claude_rotate.settings import load_config
+
+        isolated = load_config(paths).session_isolation
+        refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC), isolated=isolated)
         if refreshed:
             # accounts.json was rewritten — reload so probe sees fresh tokens
             accounts = store.load()

@@ -29,7 +29,16 @@ def execute(paths: Paths) -> int:
     now = datetime.now(UTC)
 
     if load_config(paths).session_isolation:
-        reconcile_isolated(paths, now=now)
+        synced_names = reconcile_isolated(paths, now=now)
+        refreshed = refresh_stale_tokens(paths, now=now, isolated=True)
+        if synced_names or refreshed:
+            stamp = datetime.now(UTC).isoformat(timespec="seconds")
+            if synced_names:
+                names = ", ".join(synced_names)
+                print(f"[{stamp}] credentials synced ({len(synced_names)}): {names}")
+            if refreshed:
+                names = ", ".join(refreshed)
+                print(f"[{stamp}] refreshed {len(refreshed)} stale account(s): {names}")
         return 0
 
     synced = reconcile_all(paths, now=now)
