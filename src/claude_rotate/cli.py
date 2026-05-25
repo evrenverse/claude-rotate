@@ -23,7 +23,6 @@ ROTATOR_COMMANDS = {
     "cleanup",
     "sync-credentials",
     "install-sync",
-    "hook",
 }
 ROTATOR_ROOT_FLAGS = {"--version", "-V", "--help", "-h"}
 
@@ -382,15 +381,6 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_install.add_argument("--uninstall", action="store_true", help=_SUPPRESS)
     sp_install.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
-    # hook — hidden command invoked by Claude Code hook config
-    sp_hook = sub.add_parser(
-        "hook",
-        help=_SUPPRESS,
-        formatter_class=fmt,
-        add_help=False,
-    )
-    sp_hook.add_argument("event", choices=["session-start", "user-prompt-submit"], help=_SUPPRESS)
-
     return p
 
 
@@ -467,10 +457,6 @@ def main(argv: list[str] | None = None) -> int:
             from claude_rotate.commands import install_sync
 
             return install_sync.execute(p, uninstall=args.uninstall)
-        if args.command == "hook":
-            from claude_rotate.commands import hook
-
-            return hook.execute(p, args.event)
     except ClaudeRotateError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

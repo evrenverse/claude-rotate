@@ -24,7 +24,6 @@ from claude_rotate.accounts import Account
 from claude_rotate.config import Paths
 from claude_rotate.credentials_file import CredentialsPayload, write_credentials
 from claude_rotate.errors import ClaudeBinaryError
-from claude_rotate.session_guard import GUARD_ENV_VAR
 from claude_rotate.sync import CurrentSession, write_current_session
 
 _TOKEN_TTL_MS = 8 * 3600 * 1000  # Anthropic's documented oat01 TTL
@@ -109,9 +108,6 @@ def exec_claude(account: Account, paths: Paths, args: list[str]) -> int:
     env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     # Ensure child inherits no stale CLAUDE_CONFIG_DIR pointing at a shadow home
     env.pop("CLAUDE_CONFIG_DIR", None)
-    # Global Claude Code hooks are installed in ~/.claude/settings.json, but
-    # they should enforce only sessions launched through claude-rotate.
-    env[GUARD_ENV_VAR] = "1"
 
     os.execvpe(claude_bin, [claude_bin, *args], env)
     return 1  # unreachable
