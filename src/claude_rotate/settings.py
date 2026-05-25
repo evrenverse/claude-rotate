@@ -51,7 +51,6 @@ def load_config(paths: Paths) -> RotateConfig:
 
 _TRUTHY = {"1", "true", "yes", "on"}
 _FALSY = {"0", "false", "no", "off"}
-_BOOL_KEYS = {"session_isolation", "auto_resume.enabled"}
 
 
 def save_config(paths: Paths, cfg: RotateConfig) -> None:

@@ -31,6 +31,10 @@ def ensure_account_config_dir(paths: Paths, account_name: str, *, home_claude: P
     target.chmod(0o700)
 
     desired: dict[str, Path] = {}
+    # If ~/.claude is absent (essentially only on a brand-new machine before
+    # claude has ever run), desired stays empty: we prune any stale links and
+    # leave the dir holding just the real .credentials.json. Intentional
+    # graceful degrade, not a crash.
     if home_claude.is_dir():
         for entry in home_claude.iterdir():
             if entry.name.startswith(_CREDENTIALS_PREFIX):
