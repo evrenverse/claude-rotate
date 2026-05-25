@@ -86,6 +86,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate install-sync` / `--uninstall` | Install / remove the 2-minute sync crontab entry |
 | `claude-rotate cleanup [--yes]` | Delete all rotate state (accounts, cache, logs) |
 | `claude-rotate doctor` | Self-check (binary, config, tokens, refresh-token staleness) |
+| `claude-rotate config get [<key>]` / `set <key> <value>` | View / toggle features (e.g. `session_isolation`) |
 
 `<name>` accepts either the handle (`work`) or the account's email (`work@example.com`, case-insensitive).
 
@@ -100,6 +101,20 @@ On every `claude-rotate run`:
 5. **`exec claude`** with `CLAUDE_CODE_OAUTH_TOKEN` stripped from the child environment. Claude Code reads the credentials file exactly as it would after a manual `/login`; every session-scope feature (Remote Control, `/ultrareview`, …) works.
 
 The installed sync cron runs every 2 minutes and catches any drift between the two files while a long `claude` session is running: Anthropic rotates refresh tokens on each in-session refresh, and the cron keeps `accounts.json` authoritative so the next `run` never starts with a stale token.
+
+## Session isolation (optional)
+
+By default every `claude-rotate run` writes the single global `~/.claude/.credentials.json`, so all concurrent `claude` sessions share one account. Claude Code re-reads that file on every turn — so if you start a second session that rotates to a different account, the *already-running* session is switched too on its next turn, dropping its server-side prompt cache (expensive re-processing of the whole conversation).
+
+Enable **session isolation** to keep each session pinned to its own account:
+
+```sh
+claude-rotate config set session_isolation true   # off by default
+```
+
+With it on, each `run` launches `claude` with a per-account `CLAUDE_CONFIG_DIR` under `~/.config/claude-rotate/configs/<account>/`. That directory symlinks every `~/.claude` entry **except** `.credentials.json`, which is written real and per-account. Parallel sessions on different accounts then read their own token and can never clobber each other — while history, `projects/`, `/resume`, MCP, plugins and any dashboards stay shared (they're symlinks back to the real `~/.claude`). Turn it off again with `claude-rotate config set session_isolation false`, or override per-invocation with the `CLAUDE_ROTATE_SESSION_ISOLATION` env var (env wins over the config file).
+
+> **One-time prompt:** the first isolated launch for an account opens Claude Code's workspace-trust dialog (it's a fresh config dir). Pick "Yes, I trust this folder" once per account × project.
 
 ## Why this exists
 
