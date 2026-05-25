@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -414,7 +414,9 @@ def test_doctor_fresh_oauth_account_no_stale_warning(tmp_path, capsys) -> None:
 
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True, mode=0o700)
-    now = datetime(2026, 4, 22, tzinfo=UTC)
+    # Date-independent: "refreshed recently" must stay within the stale window
+    # regardless of the real calendar date when the suite runs.
+    now = datetime.now(UTC) - timedelta(days=1)
     fresh = replace(
         _acc("main"),
         refresh_token="sk-ant-ort01-" + "r" * 40,
