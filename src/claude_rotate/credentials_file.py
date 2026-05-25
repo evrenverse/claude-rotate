@@ -72,10 +72,10 @@ def _home_claude_dir() -> Path:
 
 
 class CredentialsFile:
-    """Owns the path and atomic IO for ~/.claude/.credentials.json."""
+    """Owns the path and atomic IO for a .credentials.json file."""
 
-    def __init__(self) -> None:
-        self._dir = _home_claude_dir()
+    def __init__(self, config_dir: Path | None = None) -> None:
+        self._dir = config_dir if config_dir is not None else _home_claude_dir()
         self.path = self._dir / ".credentials.json"
 
     def write(self, payload: CredentialsPayload) -> None:
@@ -123,8 +123,8 @@ class CredentialsFile:
                 backup.unlink(missing_ok=True)
 
 
-def write_credentials(payload: CredentialsPayload) -> None:
-    CredentialsFile().write(payload)
+def write_credentials(payload: CredentialsPayload, *, config_dir: Path | None = None) -> None:
+    CredentialsFile(config_dir).write(payload)
 
 
 def read_credentials() -> CredentialsPayload | None:
