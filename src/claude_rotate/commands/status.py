@@ -69,10 +69,9 @@ def execute(paths: Paths, *, as_json: bool) -> int:
                 )
                 continue
             if err == "rate_limited":
-                # 429 on /oauth/usage is an API rate-limit on the probe
-                # endpoint, not a subscription-quota exhaustion. Prefer
-                # cached numbers; keep the candidate in ``resolved`` so
-                # selection can still consider it.
+                # A 429 without rate-limit headers is a probe failure, not
+                # trustworthy quota data. Prefer cached numbers; keep the
+                # candidate in ``resolved`` so selection can still consider it.
                 cached = cache.load(c.account.name)
                 if cached is not None:
                     c = replace(

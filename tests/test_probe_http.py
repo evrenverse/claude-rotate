@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,11 +13,16 @@ FIX = Path(__file__).parent / "fixtures"
 _NOW = 1_776_854_321
 
 
-def _make_response(status: int, body: bytes = b"{}") -> MagicMock:
+def _make_response(
+    status: int,
+    body: bytes = b"{}",
+    headers: dict[str, str] | None = None,
+) -> MagicMock:
     resp = MagicMock()
     resp.__enter__ = MagicMock(return_value=resp)
     resp.__exit__ = MagicMock(return_value=False)
     resp.status = status
+    resp.headers = headers or {}
     resp.read = MagicMock(return_value=body)
     return resp
 
@@ -25,15 +31,19 @@ def _usage_body() -> bytes:
     return (FIX / "usage_max20.json").read_bytes()
 
 
+def _rate_limit_headers() -> dict[str, str]:
+    return json.loads((FIX / "headers_ok.json").read_text())
+
+
 def test_fetch_usage_200_returns_parsed_result() -> None:
     with patch(
         "claude_rotate.probe.urllib.request.urlopen",
-        return_value=_make_response(200, _usage_body()),
+        return_value=_make_response(200, headers=_rate_limit_headers()),
     ):
         r = fetch_usage("sk-ant-oat01-zzz", now=_NOW)
     assert r.ok
-    assert r.h5_pct == 8.0
-    assert r.w7_pct == 89.0
+    assert r.h5_pct == 4.0
+    assert r.w7_pct == 96.0
 
 
 def test_fetch_usage_401_returns_unauthorized() -> None:
@@ -66,6 +76,28 @@ def test_fetch_usage_429_returns_rate_limited() -> None:
     assert r.error == "rate_limited"
 
 
+def test_fetch_usage_429_with_rate_limit_headers_returns_usage() -> None:
+    """The inference endpoint returns quota headers even when the account is capped."""
+    import urllib.error
+
+    err = urllib.error.HTTPError(
+        url="http://x",
+        code=429,
+        msg="rl",
+        hdrs=_rate_limit_headers(),
+        fp=io.BytesIO(b"{}"),
+    )
+    with patch("claude_rotate.probe.urllib.request.urlopen", side_effect=err):
+        r = fetch_usage("sk-ant-oat01-zzz", now=_NOW)
+
+    assert r.ok
+    assert r.http_code == 429
+    assert r.h5_pct == 4.0
+    assert r.w7_pct == 96.0
+    assert r.h5_reset_secs == 1279
+    assert r.w7_reset_secs == 116479
+
+
 def test_fetch_usage_500_returns_upstream_error() -> None:
     import urllib.error
 
@@ -91,7 +123,7 @@ def test_fetch_usage_sends_bearer_token() -> None:
 
     def _mock_open(req, timeout=None):  # type: ignore[no-untyped-def]
         captured.append(req)
-        return _make_response(200, _usage_body())
+        return _make_response(200, headers=_rate_limit_headers())
 
     with patch("claude_rotate.probe.urllib.request.urlopen", side_effect=_mock_open):
         fetch_usage("sk-ant-oat01-mytoken", now=_NOW)
@@ -105,7 +137,7 @@ def test_fetch_usage_sends_anthropic_beta() -> None:
 
     def _mock_open(req, timeout=None):  # type: ignore[no-untyped-def]
         captured.append(req)
-        return _make_response(200, _usage_body())
+        return _make_response(200, headers=_rate_limit_headers())
 
     with patch("claude_rotate.probe.urllib.request.urlopen", side_effect=_mock_open):
         fetch_usage("sk-ant-oat01-tok", now=_NOW)

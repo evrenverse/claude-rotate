@@ -1,4 +1,4 @@
-"""HTTP probe layer — GET /api/oauth/usage."""
+"""HTTP probe layer — POST /v1/messages and read rate-limit headers."""
 
 from __future__ import annotations
 
@@ -13,11 +13,13 @@ from typing import Any
 from claude_rotate.accounts import Account
 from claude_rotate.config import (
     ANTHROPIC_BETA,
+    ANTHROPIC_VERSION,
+    INFERENCE_URL,
+    PROBE_MODEL,
+    PROBE_TIMEOUT_SECONDS,
     USER_AGENT,
 )
 from claude_rotate.selection import Candidate, candidate_from_account
-
-USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,7 @@ class ProbeResult:
     w7_pct: float | None = None
     h5_reset_secs: int = 0
     w7_reset_secs: int = 0
-    # Extended fields from the usage endpoint
+    # Extended fields from the OAuth usage endpoint when available.
     w7_sonnet_pct: float | None = None
     w7_opus_pct: float | None = None
     extra_usage_enabled: bool = False
@@ -39,30 +41,43 @@ class ProbeResult:
 
 
 def fetch_usage(token: str, *, now: int | None = None) -> ProbeResult:
-    """GET /api/oauth/usage and parse into ProbeResult.
+    """Probe quota using Anthropic's inference rate-limit headers.
 
-    Replaces the old probe_usage() which POSTed to /v1/messages and read
-    rate-limit headers. This endpoint is read-only, quota-free, and returns
-    strictly more information (per-model usage, extra-usage state).
+    The OAuth usage endpoint can return capped or rounded headline values.
+    The inference endpoint exposes the exact unified 5h/7d usage in response
+    headers, including on 429 responses where no generation happens.
     """
     now_ts = now if now is not None else int(time.time())
+    payload = json.dumps(
+        {
+            "model": PROBE_MODEL,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}],
+        }
+    ).encode()
     req = urllib.request.Request(
-        USAGE_URL,
+        INFERENCE_URL,
+        data=payload,
         headers={
             "Authorization": f"Bearer {token}",
+            "anthropic-version": ANTHROPIC_VERSION,
             "anthropic-beta": ANTHROPIC_BETA,
             "User-Agent": USER_AGENT,
+            "Content-Type": "application/json",
             "Accept": "application/json",
         },
+        method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=12) as resp:
-            code = resp.status
-            body = json.loads(resp.read())
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT_SECONDS) as resp:
+            return parse_rate_limit_headers(resp.status, resp.headers, now=now_ts)
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return ProbeResult(ok=False, http_code=e.code, error="unauthorized")
         if e.code == 429:
+            parsed = parse_rate_limit_headers(e.code, e.headers, now=now_ts)
+            if parsed.ok:
+                return parsed
             return ProbeResult(ok=False, http_code=e.code, error="rate_limited")
         if e.code >= 500:
             return ProbeResult(ok=False, http_code=e.code, error="upstream_error")
@@ -70,7 +85,45 @@ def fetch_usage(token: str, *, now: int | None = None) -> ProbeResult:
     except (TimeoutError, OSError) as e:
         return ProbeResult(ok=False, http_code=0, error=f"network_error: {e}")
 
-    return parse_usage_response(code, body, now=now_ts)
+
+def parse_rate_limit_headers(http_code: int, headers: Any, *, now: int) -> ProbeResult:
+    """Parse Anthropic unified rate-limit headers into quota percentages."""
+
+    def _header(name: str) -> str | None:
+        value = headers.get(name)
+        return str(value) if value is not None else None
+
+    def _pct(name: str) -> float | None:
+        value = _header(name)
+        if value is None:
+            return None
+        return float(value) * 100
+
+    def _secs(name: str) -> int:
+        value = _header(name)
+        if value is None:
+            return 0
+        return max(0, int(float(value) - now))
+
+    h5_pct = _pct("anthropic-ratelimit-unified-5h-utilization")
+    w7_pct = _pct("anthropic-ratelimit-unified-7d-utilization")
+    if h5_pct is None and w7_pct is None:
+        return ProbeResult(
+            ok=False,
+            http_code=http_code,
+            error="missing_rate_limit_headers",
+            request_id=_header("request-id"),
+        )
+
+    return ProbeResult(
+        ok=True,
+        http_code=http_code,
+        h5_pct=h5_pct,
+        w7_pct=w7_pct,
+        h5_reset_secs=_secs("anthropic-ratelimit-unified-5h-reset"),
+        w7_reset_secs=_secs("anthropic-ratelimit-unified-7d-reset"),
+        request_id=_header("request-id"),
+    )
 
 
 def parse_usage_response(http_code: int, body: dict[str, Any], *, now: int) -> ProbeResult:

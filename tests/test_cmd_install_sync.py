@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
+
+import pytest
 
 from claude_rotate.commands.install_sync import (
     CRON_TAG,
     build_cron_lines,
+    build_hook_settings,
+    build_hook_shim_script,
     execute,
     merge_crontab,
+    merge_hook_settings,
 )
 from claude_rotate.config import Paths
 
@@ -17,6 +24,15 @@ def _paths(tmp_path: Path) -> Paths:
         config_dir=tmp_path / "config",
         cache_dir=tmp_path / "cache",
         state_dir=tmp_path / "state",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_claude_settings(tmp_path, monkeypatch) -> None:
+    settings_path = tmp_path / ".claude" / "settings.json"
+    monkeypatch.setattr(
+        "claude_rotate.commands.install_sync._settings_path",
+        lambda: settings_path,
     )
 
 
@@ -89,6 +105,180 @@ def test_merge_crontab_removes_all_tagged_entries() -> None:
     assert "foo" in merged
 
 
+def test_build_hook_settings_installs_session_guard_commands() -> None:
+    hook_shim = "/home/u/.local/state/claude-rotate/claude-rotate-hook"
+    hooks = build_hook_settings(hook_shim)
+    session = hooks["SessionStart"][0]["hooks"][0]
+    prompt = hooks["UserPromptSubmit"][0]["hooks"][0]
+    assert session["command"] == f"{hook_shim} session-start"
+    assert prompt["command"] == f"{hook_shim} user-prompt-submit"
+    assert prompt["type"] == "command"
+    assert prompt["timeout"] == 5
+
+
+def test_hook_shim_exits_without_python_when_guard_disabled(tmp_path) -> None:
+    log = tmp_path / "hook-called"
+    hook_bin = tmp_path / "claude-rotate-hook-bin"
+    hook_bin.write_text(f"#!/bin/sh\necho called >> {log}\n")
+    hook_bin.chmod(0o755)
+    shim = tmp_path / "claude-rotate-hook"
+    shim.write_text(build_hook_shim_script(str(hook_bin), None, tmp_path / "state"))
+    shim.chmod(0o755)
+
+    result = subprocess.run(
+        [str(shim), "user-prompt-submit"],
+        input='{"session_id":"sid"}',
+        text=True,
+        capture_output=True,
+        check=False,
+        env={},
+    )
+
+    assert result.returncode == 0
+    assert not log.exists()
+
+
+def test_hook_shim_fast_allows_same_account_prompt(tmp_path) -> None:
+    log = tmp_path / "hook-called"
+    state = tmp_path / "state"
+    sessions = state / "sessions"
+    sessions.mkdir(parents=True)
+    (state / "current-session.json").write_text('{"account_name": "matri"}\n')
+    (sessions / "sid.json").write_text('{"account_name": "matri"}\n')
+    hook_bin = tmp_path / "claude-rotate-hook-bin"
+    hook_bin.write_text(f"#!/bin/sh\necho called >> {log}\n")
+    hook_bin.chmod(0o755)
+    shim = tmp_path / "claude-rotate-hook"
+    shim.write_text(build_hook_shim_script(str(hook_bin), None, state))
+    shim.chmod(0o755)
+
+    result = subprocess.run(
+        [str(shim), "user-prompt-submit"],
+        input='{"session_id":"sid"}',
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"CLAUDE_ROTATE_GUARD": "1"},
+    )
+
+    assert result.returncode == 0
+    assert not log.exists()
+
+
+def test_hook_shim_forwards_mismatch_to_python_hook(tmp_path) -> None:
+    log = tmp_path / "hook-called"
+    forwarded = tmp_path / "payload.json"
+    state = tmp_path / "state"
+    sessions = state / "sessions"
+    sessions.mkdir(parents=True)
+    (state / "current-session.json").write_text('{"account_name": "flavius"}\n')
+    (sessions / "sid.json").write_text('{"account_name": "matri"}\n')
+    hook_bin = tmp_path / "claude-rotate-hook-bin"
+    hook_bin.write_text(f"#!/bin/sh\necho \"$@\" > {log}\ncat > {forwarded}\n")
+    hook_bin.chmod(0o755)
+    shim = tmp_path / "claude-rotate-hook"
+    shim.write_text(build_hook_shim_script(str(hook_bin), None, state))
+    shim.chmod(0o755)
+
+    result = subprocess.run(
+        [str(shim), "user-prompt-submit"],
+        input='{"session_id":"sid"}',
+        text=True,
+        capture_output=True,
+        check=False,
+        env={"CLAUDE_ROTATE_GUARD": "1"},
+    )
+
+    assert result.returncode == 0
+    assert log.read_text().strip() == "user-prompt-submit"
+    assert forwarded.read_text() == '{"session_id":"sid"}'
+
+
+def test_merge_hook_settings_preserves_other_hooks_and_adds_ours() -> None:
+    existing = {
+        "model": "opus",
+        "hooks": {
+            "UserPromptSubmit": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": "/usr/bin/other-hook"},
+                    ]
+                }
+            ]
+        },
+    }
+    merged, changed = merge_hook_settings(existing, "/state/claude-rotate-hook", remove=False)
+    assert changed is True
+    prompt_handlers = merged["hooks"]["UserPromptSubmit"]
+    commands = [
+        hook["command"]
+        for group in prompt_handlers
+        for hook in group["hooks"]
+        if hook.get("type") == "command"
+    ]
+    assert "/usr/bin/other-hook" in commands
+    assert "/state/claude-rotate-hook user-prompt-submit" in commands
+
+
+def test_merge_hook_settings_replaces_existing_claude_rotate_hooks() -> None:
+    existing = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": "/old/claude-rotate hook session-start"},
+                    ]
+                }
+            ],
+        }
+    }
+    merged, changed = merge_hook_settings(existing, "/state/claude-rotate-hook", remove=False)
+    assert changed is True
+    commands = [
+        hook["command"]
+        for group in merged["hooks"]["SessionStart"]
+        for hook in group["hooks"]
+        if hook.get("type") == "command"
+    ]
+    assert "/old/claude-rotate hook session-start" not in commands
+    assert "/state/claude-rotate-hook session-start" in commands
+
+
+def test_merge_hook_settings_removes_claude_rotate_hooks_only() -> None:
+    existing = {
+        "hooks": {
+            "SessionStart": [
+                {
+                    "hooks": [
+                        {"type": "command", "command": "/old/claude-rotate hook session-start"},
+                        {"type": "command", "command": "/usr/bin/other-hook"},
+                    ]
+                }
+            ],
+            "UserPromptSubmit": [
+                {
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "/old/claude-rotate hook user-prompt-submit",
+                        },
+                    ]
+                }
+            ],
+        }
+    }
+    merged, changed = merge_hook_settings(existing, "/state/claude-rotate-hook", remove=True)
+    assert changed is True
+    assert "UserPromptSubmit" not in merged["hooks"]
+    commands = [
+        hook["command"]
+        for group in merged["hooks"]["SessionStart"]
+        for hook in group["hooks"]
+        if hook.get("type") == "command"
+    ]
+    assert commands == ["/usr/bin/other-hook"]
+
+
 def test_execute_installs_when_crontab_writable(tmp_path, monkeypatch) -> None:
     p = _paths(tmp_path)
 
@@ -116,3 +306,40 @@ def test_execute_installs_when_crontab_writable(tmp_path, monkeypatch) -> None:
     assert "*/2 * * * *" in payload
     assert "@reboot" in payload
     assert "claude-rotate sync-credentials" in payload
+
+
+def test_execute_installs_hooks_even_when_cron_is_current(tmp_path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    settings_path = tmp_path / ".claude" / "settings.json"
+    cron_lines = build_cron_lines("/usr/local/bin/claude-rotate", p.state_dir)
+
+    monkeypatch.setattr(
+        "claude_rotate.commands.install_sync.shutil.which",
+        lambda name: "/usr/local/bin/claude-rotate" if name == "claude-rotate" else None,
+    )
+    monkeypatch.setattr(
+        "claude_rotate.commands.install_sync._settings_path",
+        lambda: settings_path,
+    )
+
+    def fake_run(args, **_kw):
+        if args[:2] == ["crontab", "-l"]:
+            return MagicMock(returncode=0, stdout="\n".join(cron_lines) + "\n", stderr="")
+        if args == ["crontab", "-"]:
+            raise AssertionError("crontab should not be rewritten")
+        raise AssertionError(f"unexpected call: {args}")
+
+    monkeypatch.setattr("claude_rotate.commands.install_sync.subprocess.run", fake_run)
+
+    rc = execute(p, uninstall=False)
+
+    assert rc == 0
+    settings = json.loads(settings_path.read_text())
+    commands = [
+        hook["command"]
+        for groups in settings["hooks"].values()
+        for group in groups
+        for hook in group["hooks"]
+    ]
+    assert str(p.state_dir / "claude-rotate-hook") + " session-start" in commands
+    assert str(p.state_dir / "claude-rotate-hook") + " user-prompt-submit" in commands
