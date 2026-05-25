@@ -38,8 +38,12 @@ def load_config(paths: Paths) -> RotateConfig:
     resume = raw.get("auto_resume") or {}
     if not isinstance(resume, dict):
         resume = {}
+    isolation = bool(raw.get("session_isolation", False))
+    env = os.environ.get("CLAUDE_ROTATE_SESSION_ISOLATION")
+    if env is not None and env.strip() != "":
+        isolation = env.strip().lower() in _TRUTHY
     return RotateConfig(
-        session_isolation=bool(raw.get("session_isolation", False)),
+        session_isolation=isolation,
         auto_resume_enabled=bool(resume.get("enabled", False)),
         auto_resume_message=str(resume.get("message", DEFAULT_RESUME_MESSAGE)),
     )

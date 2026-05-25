@@ -75,3 +75,14 @@ def test_set_value_unknown_key_raises(rotate_dir: Path) -> None:
 
     with pytest.raises(ConfigError, match="unknown config key"):
         set_value(paths(), "nope", "true")
+
+
+def test_env_overrides_session_isolation(rotate_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    p = paths()
+    save_config(p, RotateConfig(session_isolation=False))
+    monkeypatch.setenv("CLAUDE_ROTATE_SESSION_ISOLATION", "1")
+    assert load_config(p).session_isolation is True
+    monkeypatch.setenv("CLAUDE_ROTATE_SESSION_ISOLATION", "0")
+    assert load_config(p).session_isolation is False
+    monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
+    assert load_config(p).session_isolation is False
