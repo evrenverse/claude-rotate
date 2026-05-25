@@ -42,3 +42,9 @@ def test_accounts_file_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert p.lock_file == tmp_path / "config" / "accounts.json.lock"
     assert p.usage_dir == tmp_path / "cache" / "usage"
     assert p.log_file == tmp_path / "state" / "log.jsonl"
+
+
+def test_account_configs_dir_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))
+    p = config.paths()
+    assert p.account_configs_dir == tmp_path / "config" / "configs"
