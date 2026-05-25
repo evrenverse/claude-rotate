@@ -31,7 +31,6 @@ Issues   = "https://github.com/codename-cn/claude-rotate/issues"
 
 [project.scripts]
 claude-rotate = "claude_rotate.cli:main"
-claude-rotate-hook = "claude_rotate.hook_cli:main"
 
 # PEP 735 dependency groups. ``uv sync --dev`` installs this group in CI
 # and for local development. The older ``[project.optional-dependencies]``
