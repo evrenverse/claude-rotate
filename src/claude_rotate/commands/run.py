@@ -33,9 +33,14 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         refresh_stale_accounts(paths)
 
     # Pre-run reconcile: pull any drift the cron hasn't picked up yet.
-    # Safe to call even when .credentials.json doesn't exist.
     with contextlib.suppress(Exception):
-        reconcile_all(paths, now=datetime.now(UTC))
+        from claude_rotate.settings import load_config
+        from claude_rotate.sync import reconcile_isolated
+
+        if load_config(paths).session_isolation:
+            reconcile_isolated(paths, now=datetime.now(UTC))
+        else:
+            reconcile_all(paths, now=datetime.now(UTC))
 
     store = Store(paths)
     accounts = store.load()

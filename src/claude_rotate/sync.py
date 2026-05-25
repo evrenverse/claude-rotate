@@ -125,6 +125,46 @@ def reconcile_all(paths: Paths, *, now: datetime) -> bool:
     return reconcile_once(payload, paths, now=now)
 
 
+def reconcile_isolated(paths: Paths, *, now: datetime) -> list[str]:
+    """Sync each per-account isolated .credentials.json back to accounts.json.
+
+    When session_isolation is on there is no single global credentials file;
+    each account owns ``<configs>/<account>/.credentials.json``. A running
+    session rotates tokens inside its own dir, so we read every account dir
+    and write any drift back. Returns the names that changed.
+    """
+    from claude_rotate.credentials_file import CredentialsFile
+
+    base = paths.account_configs_dir
+    if not base.is_dir():
+        return []
+    store = Store(paths)
+    accounts = store.load()
+    changed: list[str] = []
+    for name, acct in list(accounts.items()):
+        cred_path = base / name / ".credentials.json"
+        if not cred_path.exists():
+            continue
+        payload = CredentialsFile(base / name).read()
+        if payload is None:
+            continue
+        access_changed = payload.access_token != acct.runtime_token
+        refresh_changed = payload.refresh_token != acct.refresh_token
+        if not access_changed and not refresh_changed:
+            continue
+        accounts[name] = replace(
+            acct,
+            runtime_token=payload.access_token,
+            refresh_token=payload.refresh_token,
+            runtime_token_obtained_at=now if access_changed else acct.runtime_token_obtained_at,
+            refresh_token_obtained_at=now if refresh_changed else acct.refresh_token_obtained_at,
+        )
+        changed.append(name)
+    if changed:
+        store.save(accounts)
+    return changed
+
+
 def refresh_stale_tokens(paths: Paths, *, now: datetime) -> list[str]:
     """Proactively refresh any OAuth account whose access token is stale.
 
