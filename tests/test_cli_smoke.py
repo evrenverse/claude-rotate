@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+from claude_rotate import __version__
 from claude_rotate.cli import main
 
 
@@ -10,14 +11,14 @@ def test_version_flag_prints_version(capsys) -> None:
     rc = main(["--version"])
     assert rc == 0
     out = capsys.readouterr().out.strip()
-    assert out == "0.1.0"
+    assert out == __version__
 
 
 def test_short_version_flag_prints_version(capsys) -> None:
     rc = main(["-V"])
     assert rc == 0
     out = capsys.readouterr().out.strip()
-    assert out == "0.1.0"
+    assert out == __version__
 
 
 def test_help_flag_exits_zero(capsys) -> None:
