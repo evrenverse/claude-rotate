@@ -1,8 +1,10 @@
+import re
+
 from claude_rotate import __version__
 
 
 def test_version_is_set() -> None:
-    assert __version__ == "0.1.0"
+    assert re.fullmatch(r"\d+\.\d+\.\d+", __version__)
 
 
 def test_main_module_invokes_cli_main(monkeypatch) -> None:  # type: ignore[no-untyped-def]
