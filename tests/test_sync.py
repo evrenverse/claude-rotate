@@ -380,6 +380,52 @@ def test_reconcile_isolated_noop_when_unchanged(rotate_dir: Path) -> None:
     assert reconcile_isolated(p, now=datetime(2026, 5, 25, tzinfo=UTC)) == []
 
 
+def test_reconcile_isolated_skips_stale_file_no_rollback(rotate_dir: Path) -> None:
+    """A per-account .credentials.json OLDER than accounts.json must NOT be
+    copied back. Doing so rolls accounts.json onto an already-rotated, dead
+    refresh token — the bug behind the constant relogins."""
+    import os
+
+    p = paths()
+    fresh_obtained = datetime(2026, 5, 26, 12, 0, tzinfo=UTC)
+    Store(p).save(
+        {
+            "matri": Account(
+                name="matri",
+                runtime_token="sk-ant-oat01-FRESH",
+                label="matri",
+                created_at=datetime(2026, 4, 23, tzinfo=UTC),
+                plan="max_20x",
+                refresh_token="sk-ant-ort01-FRESH",
+                runtime_token_obtained_at=fresh_obtained,
+                refresh_token_obtained_at=fresh_obtained,
+            )
+        }
+    )
+    cfg_dir = p.account_configs_dir / "matri"
+    cfg_dir.mkdir(parents=True)
+    write_credentials(
+        CredentialsPayload(
+            access_token="sk-ant-oat01-STALE",
+            refresh_token="sk-ant-ort01-STALE",
+            expires_at_ms=1_700_000_000_000,
+            scopes=["user:inference"],
+            subscription_type="max",
+            rate_limit_tier=None,
+        ),
+        config_dir=cfg_dir,
+    )
+    # Backdate the file so it predates accounts.json's obtained_at (stale leftover).
+    stale_ts = (fresh_obtained - timedelta(hours=6)).timestamp()
+    os.utime(cfg_dir / ".credentials.json", (stale_ts, stale_ts))
+
+    changed = reconcile_isolated(p, now=datetime(2026, 5, 26, 12, 5, tzinfo=UTC))
+    assert changed == []
+    acct = Store(p).load()["matri"]
+    assert acct.runtime_token == "sk-ant-oat01-FRESH"  # NOT rolled back
+    assert acct.refresh_token == "sk-ant-ort01-FRESH"
+
+
 def test_refresh_stale_tokens_isolated_writes_config_dir(rotate_dir: Path) -> None:
     """Isolation mode: a stale idle account is refreshed into its own config dir."""
     from types import SimpleNamespace
