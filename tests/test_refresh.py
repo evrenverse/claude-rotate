@@ -115,6 +115,31 @@ def test_ensure_fresh_returns_unchanged_on_refresh_http_error(tmp_path) -> None:
     assert Store(p).load()["main"].runtime_token == acct.runtime_token
 
 
+def test_ensure_fresh_uses_freshest_stored_token_no_double_refresh(tmp_path) -> None:
+    """ensure_fresh must reload accounts.json under the lock and skip the
+    refresh if the stored token is already fresh — e.g. a concurrent cron
+    tick refreshed it a moment ago. Refreshing again would double-spend the
+    rotating refresh token and get the whole token family revoked."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    stale_arg = _acc()  # obtained_at = NOW - 6h (stale by the threshold)
+    # The store already holds a fresher token (a concurrent refresher won).
+    fresh_stored = _acc(
+        runtime_token="sk-ant-oat01-FRESH" + "z" * 95,
+        refresh_token="sk-ant-ort01-FRESH" + "z" * 95,
+        runtime_token_obtained_at=NOW - timedelta(minutes=2),
+        refresh_token_obtained_at=NOW - timedelta(minutes=2),
+    )
+    Store(p).save({"main": fresh_stored})
+
+    with patch("claude_rotate.refresh.refresh_access_token") as mock_refresh:
+        fresh = ensure_fresh(stale_arg, p, now=NOW)
+
+    mock_refresh.assert_not_called()
+    assert fresh.runtime_token == fresh_stored.runtime_token
+    assert fresh.refresh_token == fresh_stored.refresh_token
+
+
 def test_ensure_fresh_swallows_network_errors(tmp_path) -> None:
     """DNS / socket / URL errors must not escape — user would see a
     traceback instead of a graceful fallthrough."""

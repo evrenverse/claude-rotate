@@ -12,6 +12,8 @@ import json
 import os
 import tempfile
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -193,6 +195,11 @@ class Store:
 
     def save(self, accounts: dict[str, Account]) -> None:
         """Serialize the whole map atomically under a flock."""
+        with self._write_lock():
+            self._save_unlocked(accounts)
+
+    def _save_unlocked(self, accounts: dict[str, Account]) -> None:
+        """``save`` body without acquiring the flock — caller already holds it."""
         path = self._paths.accounts_file
         path.parent.mkdir(parents=True, exist_ok=True)
         # Tokens live in this dir; enforce 0o700 idempotently. Without this,
@@ -200,28 +207,63 @@ class Store:
         # (usually 0o755) and `doctor` rightly reports a warning.
         path.parent.chmod(0o700)
 
+        payload = {
+            "version": SCHEMA_VERSION,
+            "accounts": {name: acct.to_dict() for name, acct in accounts.items()},
+        }
+        fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
+        tmp = Path(tmp_str)
+        try:
+            # chmod *before* writing any token bytes so the file is
+            # never world/group-readable, not even for the microseconds
+            # between the write and a post-write chmod.
+            tmp.chmod(0o600)
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f, indent=2, sort_keys=True)
+                f.write("\n")
+            tmp.replace(path)
+        finally:
+            if tmp.exists():
+                tmp.unlink()
+
+    @contextmanager
+    def locked(self) -> Iterator[LockedStore]:
+        """Hold the accounts.json flock across a read-modify-write block.
+
+        ``save`` alone locks only the final write, so two processes (a cron
+        tick and a ``run``) can each load the same rotating refresh token,
+        both spend it, and trip Anthropic's refresh-token-reuse detection —
+        which revokes the whole token family and forces a relogin.
+
+        Inside ``with store.locked() as s:`` the exclusive flock is held for
+        the entire block, so ``s.load()`` → refresh → ``s.save()`` runs as one
+        critical section. Re-check ``should_refresh`` against the just-loaded
+        token before spending it: another writer may have rotated it while we
+        waited for the lock.
+        """
         with self._write_lock():
-            payload = {
-                "version": SCHEMA_VERSION,
-                "accounts": {name: acct.to_dict() for name, acct in accounts.items()},
-            }
-            fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
-            tmp = Path(tmp_str)
-            try:
-                # chmod *before* writing any token bytes so the file is
-                # never world/group-readable, not even for the microseconds
-                # between the write and a post-write chmod.
-                tmp.chmod(0o600)
-                with os.fdopen(fd, "w") as f:
-                    json.dump(payload, f, indent=2, sort_keys=True)
-                    f.write("\n")
-                tmp.replace(path)
-            finally:
-                if tmp.exists():
-                    tmp.unlink()
+            yield LockedStore(self)
 
     def _write_lock(self) -> _FlockGuard:
         return _FlockGuard(self._paths.lock_file)
+
+
+class LockedStore:
+    """A ``Store`` view whose ``load``/``save`` skip locking.
+
+    Yielded by ``Store.locked()``; the flock is already held for the block,
+    so re-locking inside (``save`` opens a second fd → ``flock`` is not
+    recursive across fds in one process) would deadlock.
+    """
+
+    def __init__(self, store: Store) -> None:
+        self._store = store
+
+    def load(self) -> dict[str, Account]:
+        return self._store.load()
+
+    def save(self, accounts: dict[str, Account]) -> None:
+        self._store._save_unlocked(accounts)
 
 
 class _FlockGuard:

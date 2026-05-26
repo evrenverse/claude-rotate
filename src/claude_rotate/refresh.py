@@ -39,26 +39,30 @@ def ensure_fresh(account: Account, paths: Paths, *, now: datetime | None = None)
     if not should_refresh(account, now=now):
         return account
 
-    assert account.refresh_token is not None  # should_refresh guards this
-
-    try:
-        pair = refresh_access_token(account.refresh_token)
-    except (ClaudeRotateError, urllib.error.URLError, OSError):
-        # Swallow. exec will proceed with the stale token; claude will
-        # prompt for login if the token turns out to be dead on arrival.
-        return account
-
-    updated = replace(
-        account,
-        runtime_token=pair.access_token,
-        refresh_token=pair.refresh_token,
-        runtime_token_obtained_at=now,
-        refresh_token_obtained_at=now,
-    )
-
     store = Store(paths)
-    all_accounts = store.load()
-    all_accounts[account.name] = updated
-    store.save(all_accounts)
-
-    return updated
+    try:
+        with store.locked() as locked:
+            all_accounts = locked.load()
+            stored = all_accounts.get(account.name, account)
+            # Re-check under the lock against the freshest stored token: a
+            # concurrent refresher (cron tick, parallel run) may have rotated
+            # it while we waited for the lock. Spending the now-stale refresh
+            # token again would trip reuse detection and revoke the family.
+            if not should_refresh(stored, now=now):
+                return stored
+            assert stored.refresh_token is not None  # should_refresh guards this
+            pair = refresh_access_token(stored.refresh_token)
+            updated = replace(
+                stored,
+                runtime_token=pair.access_token,
+                refresh_token=pair.refresh_token,
+                runtime_token_obtained_at=now,
+                refresh_token_obtained_at=now,
+            )
+            all_accounts[account.name] = updated
+            locked.save(all_accounts)
+            return updated
+    except (ClaudeRotateError, urllib.error.URLError, OSError):
+        # Swallow (incl. LockTimeoutError ⊂ ClaudeRotateError). exec proceeds
+        # with the stale token; claude prompts for login if it's dead on arrival.
+        return account

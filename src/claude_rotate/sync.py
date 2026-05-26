@@ -31,7 +31,7 @@ import os
 import tempfile
 import urllib.error
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from claude_rotate.accounts import Store
@@ -145,6 +145,17 @@ def reconcile_isolated(paths: Paths, *, now: datetime) -> list[str]:
         cred_path = base / name / ".credentials.json"
         if not cred_path.exists():
             continue
+        # Only adopt the file's tokens if it was written AFTER our last known
+        # refresh. A file older than accounts.json is a stale leftover (an old
+        # run wrote it, then the cron/ensure_fresh rotated accounts.json past
+        # it); copying it back would revive an already-rotated, dead refresh
+        # token — the bug behind the constant relogins. A genuine in-session
+        # rotation by claude always post-dates obtained_at, so this still
+        # captures those. (obtained_at None → legacy import, can't compare → adopt.)
+        if acct.runtime_token_obtained_at is not None:
+            file_mtime = datetime.fromtimestamp(cred_path.stat().st_mtime, UTC)
+            if file_mtime <= acct.runtime_token_obtained_at:
+                continue
         payload = CredentialsFile(base / name).read()
         if payload is None:
             continue
@@ -186,30 +197,39 @@ def refresh_stale_tokens(paths: Paths, *, now: datetime, isolated: bool = False)
     from claude_rotate.exec import build_credentials_payload  # local import to avoid cycle
 
     store = Store(paths)
-    accounts = store.load()
+    names = list(store.load().keys())
     refreshed: list[str] = []
 
-    for name, acct in accounts.items():
-        if not should_refresh(acct, now=now):
-            continue
-        assert acct.refresh_token is not None  # should_refresh guards this
+    for name in names:
+        # Each account's refresh is its own locked read-modify-write: re-load
+        # and re-check staleness under the flock, so a concurrent writer (a
+        # parallel run, the cron) can't make us spend a refresh token it has
+        # already rotated — that double-spend trips reuse detection and kills
+        # the family. LockTimeoutError ⊂ ClaudeRotateError → skip this tick.
         try:
-            pair = refresh_access_token(acct.refresh_token)
+            with store.locked() as locked:
+                accounts = locked.load()
+                acct = accounts.get(name)
+                if acct is None or not should_refresh(acct, now=now):
+                    continue
+                assert acct.refresh_token is not None  # should_refresh guards this
+                pair = refresh_access_token(acct.refresh_token)
+                accounts[name] = replace(
+                    acct,
+                    runtime_token=pair.access_token,
+                    refresh_token=pair.refresh_token,
+                    runtime_token_obtained_at=now,
+                    refresh_token_obtained_at=now,
+                )
+                locked.save(accounts)
         except (ClaudeRotateError, urllib.error.URLError, OSError):
             continue
-        accounts[name] = replace(
-            acct,
-            runtime_token=pair.access_token,
-            refresh_token=pair.refresh_token,
-            runtime_token_obtained_at=now,
-            refresh_token_obtained_at=now,
-        )
         refreshed.append(name)
 
     if not refreshed:
         return []
 
-    store.save(accounts)
+    final = store.load()
 
     if isolated:
         # Isolation mode: push each refreshed account's fresh token into its own
@@ -223,7 +243,7 @@ def refresh_stale_tokens(paths: Paths, *, now: datetime, isolated: bool = False)
             if cfg_dir.is_dir():
                 with contextlib.suppress(OSError):
                     write_credentials(
-                        build_credentials_payload(accounts[name], now=now),
+                        build_credentials_payload(final[name], now=now),
                         config_dir=cfg_dir,
                     )
     else:
@@ -232,7 +252,7 @@ def refresh_stale_tokens(paths: Paths, *, now: datetime, isolated: bool = False)
         # tokens and doesn't roll them back with the now-stale copy on disk.
         session = read_current_session(paths)
         if session and session.account_name in refreshed:
-            active = accounts[session.account_name]
+            active = final[session.account_name]
             # best-effort; accounts.json is still the source of truth
             with contextlib.suppress(OSError):
                 write_credentials(build_credentials_payload(active, now=now))
