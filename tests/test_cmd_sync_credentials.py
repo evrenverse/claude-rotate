@@ -154,8 +154,8 @@ def test_isolated_sync_mirrors_session_creds_to_global_fallback(tmp_path, monkey
 
 
 def test_isolated_mirror_skips_rewrite_when_global_already_current(tmp_path, monkeypatch) -> None:
-    """A re-mirror with an unchanged token must not rewrite the file: every write
-    spawns a `.bak-*`, and the 2-minute cron would otherwise churn ~720 backups/day.
+    """A re-mirror with an unchanged token must not rewrite the file, so the
+    2-minute cron does not churn the global credentials file on every tick.
     """
     home = _fake_home(tmp_path, monkeypatch)
     p = _paths(tmp_path)
@@ -165,9 +165,10 @@ def test_isolated_mirror_skips_rewrite_when_global_already_current(tmp_path, mon
     Store(p).save({"matri": _isolated_account(now)})
     write_current_session(p, CurrentSession(account_name="matri"))
 
+    global_file = home / ".claude" / ".credentials.json"
     assert execute(p) == 0  # first tick → writes the global fallback
-    backups_after_first = list((home / ".claude").glob(".credentials.json.bak-*"))
+    mtime_after_first = global_file.stat().st_mtime_ns
 
     assert execute(p) == 0  # second tick → token unchanged, must be a no-op
-    backups_after_second = list((home / ".claude").glob(".credentials.json.bak-*"))
-    assert len(backups_after_second) == len(backups_after_first)
+    mtime_after_second = global_file.stat().st_mtime_ns
+    assert mtime_after_second == mtime_after_first

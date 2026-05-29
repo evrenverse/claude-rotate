@@ -78,7 +78,12 @@ def test_write_produces_expected_json_shape(tmp_path, monkeypatch) -> None:
     }
 
 
-def test_write_backs_up_existing_file(tmp_path, monkeypatch) -> None:
+def test_write_does_not_back_up_existing_file(tmp_path, monkeypatch) -> None:
+    """write() overwrites in place — it must never snapshot the old file.
+
+    The previous behaviour wrote one ``.bak-*`` per rotation/refresh, which
+    piled up hundreds of stale token copies between prunes.
+    """
     home = _fake_home(tmp_path, monkeypatch)
     existing = home / ".claude" / ".credentials.json"
     existing.write_text('{"original": true}')
@@ -95,8 +100,7 @@ def test_write_backs_up_existing_file(tmp_path, monkeypatch) -> None:
     CredentialsFile().write(payload)
 
     backups = list((home / ".claude").glob(".credentials.json.bak-*"))
-    assert len(backups) == 1
-    assert json.loads(backups[0].read_text()) == {"original": True}
+    assert backups == []
 
 
 def test_write_atomic_no_tmp_leftover(tmp_path, monkeypatch) -> None:
@@ -149,13 +153,14 @@ def test_read_handles_null_refresh_token(tmp_path, monkeypatch) -> None:
     assert payload.refresh_token is None
 
 
-def test_write_prunes_old_backups(tmp_path, monkeypatch) -> None:
-    """write() must opportunistically clean backups older than 7 days."""
+def test_write_removes_leftover_backups(tmp_path, monkeypatch) -> None:
+    """write() sweeps up any ``.bak-*`` left by older versions, regardless of age."""
     home = _fake_home(tmp_path, monkeypatch)
-    old_ts = int(time.time()) - 30 * 86400  # 30 days ago
-    old_backup = home / ".claude" / f".credentials.json.bak-{old_ts}"
+    now = int(time.time())
+    old_backup = home / ".claude" / f".credentials.json.bak-{now - 30 * 86400}"
     old_backup.write_text("{}")
-    old_backup.chmod(0o600)
+    recent_backup = home / ".claude" / f".credentials.json.bak-{now - 60}"
+    recent_backup.write_text("{}")
 
     payload = CredentialsPayload(
         access_token="sk-ant-oat01-" + "a" * 100,
@@ -167,21 +172,7 @@ def test_write_prunes_old_backups(tmp_path, monkeypatch) -> None:
     )
     CredentialsFile().write(payload)
 
-    assert not old_backup.exists()
-
-
-def test_prune_backups_older_than_7_days(tmp_path, monkeypatch) -> None:
-    home = _fake_home(tmp_path, monkeypatch)
-    now = int(time.time())
-    old = home / ".claude" / f".credentials.json.bak-{now - 10 * 86400}"
-    old.write_text("{}")
-    recent = home / ".claude" / f".credentials.json.bak-{now - 86400}"
-    recent.write_text("{}")
-
-    CredentialsFile().prune_backups(now=now, max_age_days=7)
-
-    assert not old.exists()
-    assert recent.exists()
+    assert list((home / ".claude").glob(".credentials.json.bak-*")) == []
 
 
 def test_write_credentials_to_explicit_dir(tmp_path: Path) -> None:

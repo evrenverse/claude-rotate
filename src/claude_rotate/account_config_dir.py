@@ -1,9 +1,10 @@
 """Build/refresh a per-account CLAUDE_CONFIG_DIR as a symlink mirror of ~/.claude.
 
 Every entry of ~/.claude is symlinked into the per-account dir EXCEPT
-.credentials.json (and its backups): that one file is written real and
-per-account by exec.py, so a running session reads its own token and a
-parallel run on another account can never overwrite it. Everything else
+.credentials.json and any ``.credentials.json.*`` siblings (tmp writes,
+legacy backups): that one file is written real and per-account by exec.py,
+so a running session reads its own token and a parallel run on another
+account can never overwrite it. Everything else
 (projects/, history, .claude.json, settings, plugins, …) stays shared, so
 the user's dashboards, /resume and stats keep working unchanged.
 
@@ -32,7 +33,7 @@ def _prune_diverged(target: Path, *, now: float) -> None:
     """Drop self-heal backups (``.diverged-<name>-<ts>``) older than the cutoff.
 
     Divergence is rare, but without this the backups would accumulate forever.
-    Mirrors ``CredentialsFile.prune_backups``: parse the trailing unix-ts segment.
+    Parses the trailing unix-ts segment to decide what is old enough to drop.
     """
     threshold = now - _DIVERGED_MAX_AGE_DAYS * 86400
     for p in target.glob(f"{_DIVERGED_PREFIX}*"):
