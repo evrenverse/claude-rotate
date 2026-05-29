@@ -6,7 +6,7 @@
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Mypy](https://img.shields.io/badge/type--checked-mypy%20strict-blue.svg)](http://mypy-lang.org/)
 
-**Rotate multiple Anthropic [Claude Code](https://claude.com/claude-code) (Max / Pro) subscriptions from a single terminal.** `claude-rotate` probes each logged-in account's live 5-hour and weekly quota, picks the one with the most headroom, writes a full-scope `~/.claude/.credentials.json`, and `exec`s the real `claude` binary — no per-account shadow directories, no daily re-login, every Claude Code feature (Remote Control, session-scope commands, …) works.
+**Rotate multiple Anthropic [Claude Code](https://claude.com/claude-code) (Max / Pro) subscriptions from a single terminal.** `claude-rotate` probes each logged-in account's live 5-hour and weekly quota, picks the one with the most headroom, writes a full-scope `~/.claude/.credentials.json`, and `exec`s the real `claude` binary — no per-account shadow directories by default, no daily re-login, every Claude Code feature (Remote Control, session-scope commands, …) works.
 
 ```text
                    5h                         weekly                         expires
@@ -75,6 +75,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate run [args…]` | Picks best account, exec `claude` (default when no command given) |
 | `claude-rotate login <email> [<handle>]` | Add or re-login an account (interactive OAuth PKCE) |
 | `claude-rotate login <email> <handle> --replace` | Overwrite an existing account |
+| `claude-rotate login <email> <handle> --from-env` / `--token-file <path>` | Headless login (no browser) from `CLAUDE_ROTATE_TOKEN` / a token file — grants inference-only scope |
 | `claude-rotate list` | Show configured accounts (no network) |
 | `claude-rotate status` | Live dashboard + health exit code |
 | `claude-rotate status --json` | Machine-readable state |
@@ -98,7 +99,7 @@ On every `claude-rotate run`:
 2. **Pick** the account with the most 5-hour and weekly quota headroom (or the pinned account, if any).
 3. **Refresh the access token** if it's older than 4 hours, using the OAuth refresh token stored in `accounts.json`.
 4. **Write `~/.claude/.credentials.json`** with full scopes (`user:profile`, `user:inference`, `user:sessions:claude_code`, `user:mcp_servers`, `user:file_upload`) — the same shape Claude Code's own `/login` produces.
-5. **`exec claude`** with `CLAUDE_CODE_OAUTH_TOKEN` stripped from the child environment. Claude Code reads the credentials file exactly as it would after a manual `/login`; every session-scope feature (Remote Control, `/ultrareview`, …) works.
+5. **`exec claude`** with `CLAUDE_CODE_OAUTH_TOKEN` and any inherited `CLAUDE_CONFIG_DIR` stripped from the child environment (session isolation re-sets `CLAUDE_CONFIG_DIR` per account — see below). Claude Code reads the credentials file exactly as it would after a manual `/login`; every session-scope feature (Remote Control, `/code-review ultra`, …) works.
 
 The installed sync cron runs every 2 minutes and catches any drift between the two files while a long `claude` session is running: Anthropic rotates refresh tokens on each in-session refresh, and the cron keeps `accounts.json` authoritative so the next `run` never starts with a stale token.
 
@@ -113,6 +114,8 @@ claude-rotate config set session_isolation true   # off by default
 ```
 
 With it on, each `run` launches `claude` with a per-account `CLAUDE_CONFIG_DIR` under `~/.config/claude-rotate/configs/<account>/`. That directory symlinks every `~/.claude` entry **except** `.credentials.json`, which is written real and per-account. Parallel sessions on different accounts then read their own token and can never clobber each other — while history, `projects/`, `/resume`, MCP, plugins and any dashboards stay shared (they're symlinks back to the real `~/.claude`). Turn it off again with `claude-rotate config set session_isolation false`, or override per-invocation with the `CLAUDE_ROTATE_SESSION_ISOLATION` env var (env wins over the config file).
+
+Even in isolation mode the sync cron keeps the global `~/.claude/.credentials.json` warm: every tick it mirrors the **access** token of the most recently launched account there (the refresh token is stripped). That way *headless* consumers that never set `CLAUDE_CONFIG_DIR` — CI scripts, agent workers spawning `claude` directly — don't fall back to a frozen, expired file. Stripping the refresh token means such a headless `claude` can never rotate it and pull the token family out from under the rotator.
 
 > **One-time prompt:** the first isolated launch for an account opens Claude Code's workspace-trust dialog (it's a fresh config dir). Pick "Yes, I trust this folder" once per account × project.
 
@@ -136,7 +139,7 @@ A single Max-plan session hits the 5-hour quota cap long before the day is over.
 Two files cooperate:
 
 - **`~/.config/claude-rotate/accounts.json`** (Linux) / `~/Library/Application Support/claude-rotate/accounts.json` (macOS) — the multi-account store, `chmod 600`, parent dir `chmod 700`. Override the base directory with `CLAUDE_ROTATE_DIR=<path>`.
-- **`~/.claude/.credentials.json`** — the single-account file Claude Code reads at startup. Written fresh by each `claude-rotate run` from the chosen account's tokens in `accounts.json`, `chmod 600`. The previous contents are snapshot-backed up alongside and pruned after 7 days.
+- **`~/.claude/.credentials.json`** — the single-account file Claude Code reads at startup. Written fresh by each `claude-rotate run` from the chosen account's tokens in `accounts.json` (atomic in-place replace, `chmod 600`). No backup copies are kept: `accounts.json` is the source of truth, so the overwrite is always safe to redo.
 
 The sync cron (`claude-rotate install-sync`) reconciles these two whenever Claude Code refreshes its own tokens mid-session, so `accounts.json` never falls out of date.
 
