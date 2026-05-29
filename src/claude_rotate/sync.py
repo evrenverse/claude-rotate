@@ -258,3 +258,49 @@ def refresh_stale_tokens(paths: Paths, *, now: datetime, isolated: bool = False)
                 write_credentials(build_credentials_payload(active, now=now))
 
     return refreshed
+
+
+def mirror_session_to_global(paths: Paths, *, now: datetime) -> str | None:
+    """Mirror the current session's access token into ~/.claude/.credentials.json.
+
+    Isolation mode writes credentials only into per-account config dirs and points
+    each live session's CLAUDE_CONFIG_DIR at its own dir. That leaves the default
+    ~/.claude/.credentials.json frozen and expiring — which breaks any *headless*
+    consumer that never sets CLAUDE_CONFIG_DIR and therefore falls back to the
+    default dir (cron scripts, CI, the enniflow worker spawning `claude`). This
+    keeps that fallback file fresh, mirroring whichever account ``run`` last
+    activated (per current-session.json).
+
+    The refresh token is deliberately stripped: in isolation mode nothing
+    reconciles the global file back into accounts.json, so a headless `claude`
+    that rotated it would orphan the new pair and make the next rotator refresh
+    double-spend a dead refresh token (reuse detection kills the whole family).
+    Without a refresh token the worst case is a clean auth failure once the
+    access token finally expires — never a killed account. The cron's 2-minute
+    cadence (and the ≤4h refresh threshold) keeps the mirrored access token well
+    inside its 8h TTL, so headless callers effectively always see a live token.
+
+    Idempotent: skips the write when the global file already holds this access
+    token, so the cron does not churn a ``.bak-*`` backup every tick.
+
+    Returns the mirrored account name when the file was (re)written, else None.
+    """
+    from claude_rotate.exec import build_credentials_payload  # local import to avoid cycle
+
+    session = read_current_session(paths)
+    if session is None:
+        return None
+    active = Store(paths).load().get(session.account_name)
+    if active is None:
+        return None
+
+    existing = read_credentials()
+    if existing is not None and existing.access_token == active.runtime_token:
+        return None
+
+    payload = replace(build_credentials_payload(active, now=now), refresh_token=None)
+    try:
+        write_credentials(payload)
+    except OSError:
+        return None
+    return session.account_name

@@ -22,7 +22,12 @@ from datetime import UTC, datetime
 
 from claude_rotate.config import Paths
 from claude_rotate.settings import load_config
-from claude_rotate.sync import reconcile_all, reconcile_isolated, refresh_stale_tokens
+from claude_rotate.sync import (
+    mirror_session_to_global,
+    reconcile_all,
+    reconcile_isolated,
+    refresh_stale_tokens,
+)
 
 
 def execute(paths: Paths) -> int:
@@ -31,7 +36,11 @@ def execute(paths: Paths) -> int:
     if load_config(paths).session_isolation:
         synced_names = reconcile_isolated(paths, now=now)
         refreshed = refresh_stale_tokens(paths, now=now, isolated=True)
-        if synced_names or refreshed:
+        # Keep the default ~/.claude/.credentials.json fresh so headless consumers
+        # (CI, the enniflow worker) that never set CLAUDE_CONFIG_DIR still boot with
+        # a live token instead of the frozen, expired isolation-mode leftover.
+        mirrored = mirror_session_to_global(paths, now=now)
+        if synced_names or refreshed or mirrored:
             stamp = datetime.now(UTC).isoformat(timespec="seconds")
             if synced_names:
                 names = ", ".join(synced_names)
@@ -39,6 +48,8 @@ def execute(paths: Paths) -> int:
             if refreshed:
                 names = ", ".join(refreshed)
                 print(f"[{stamp}] refreshed {len(refreshed)} stale account(s): {names}")
+            if mirrored:
+                print(f"[{stamp}] mirrored global fallback credentials: {mirrored}")
         return 0
 
     synced = reconcile_all(paths, now=now)
