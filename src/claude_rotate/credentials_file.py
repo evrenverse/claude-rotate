@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -80,8 +79,6 @@ class CredentialsFile:
 
     def write(self, payload: CredentialsPayload) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            self._backup_existing()
 
         fd, tmp_str = tempfile.mkstemp(
             dir=str(self._dir),
@@ -98,29 +95,19 @@ class CredentialsFile:
             if tmp.exists():
                 tmp.unlink()
 
-        # Opportunistic cleanup so backups don't accumulate forever.
-        self.prune_backups(now=int(time.time()))
+        # We keep no .credentials.json backups: the previous per-write snapshots
+        # piled up one stale token copy per rotation/refresh (hundreds between
+        # prunes). Sweep up any ``.bak-*`` left behind by an older version.
+        self._remove_backups()
 
     def read(self) -> CredentialsPayload | None:
         if not self.path.exists():
             return None
         return CredentialsPayload.from_json(json.loads(self.path.read_text()))
 
-    def _backup_existing(self) -> None:
-        stamp = int(time.time())
-        backup = self._dir / f".credentials.json.bak-{stamp}"
-        backup.write_bytes(self.path.read_bytes())
-        backup.chmod(0o600)
-
-    def prune_backups(self, *, now: int, max_age_days: int = 7) -> None:
-        threshold = now - max_age_days * 86400
+    def _remove_backups(self) -> None:
         for backup in self._dir.glob(".credentials.json.bak-*"):
-            try:
-                ts = int(backup.name.rsplit("-", 1)[1])
-            except ValueError:
-                continue
-            if ts < threshold:
-                backup.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
 
 
 def write_credentials(payload: CredentialsPayload, *, config_dir: Path | None = None) -> None:

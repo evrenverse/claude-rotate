@@ -281,7 +281,7 @@ def mirror_session_to_global(paths: Paths, *, now: datetime) -> str | None:
     inside its 8h TTL, so headless callers effectively always see a live token.
 
     Idempotent: skips the write when the global file already holds this access
-    token, so the cron does not churn a ``.bak-*`` backup every tick.
+    token, so the 2-minute cron does not rewrite the global file every tick.
 
     Returns the mirrored account name when the file was (re)written, else None.
     """
