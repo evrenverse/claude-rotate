@@ -174,6 +174,25 @@ def _pct_color(pct: float | None, width: int = 12) -> str:
     return _color_at(filled - 1, width)
 
 
+def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> int | None:
+    """Linear projection of where ``pct`` lands at window reset.
+
+    Stateless — relies only on the current percentage and seconds-until-reset.
+    Truncates exactly like the Bash statusline (``int(pct)`` + floor division)
+    so the dashboard and statusline show the same figure for the same inputs.
+    Returns ``None`` when there is no usable elapsed time (no active window or
+    a brand-new window), 0 for zero usage, and caps the result at 999.
+    """
+    if pct is None or reset_secs <= 0:
+        return None
+    elapsed = window_secs - reset_secs
+    if elapsed <= 0:
+        return None
+    if pct <= 0:
+        return 0
+    return min(999, int(pct) * window_secs // elapsed)
+
+
 def _bar_pct_reset(
     pct: float | None,
     reset_secs: int,

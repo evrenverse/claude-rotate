@@ -34,6 +34,12 @@ HOURLY_WEIGHT = 1.0
 METADATA_REFRESH_DAYS = 7
 STALE_METADATA_WARN_DAYS = 10
 
+# Forecast windows — used by the status dashboard's [→XX%] projection to
+# derive elapsed time from seconds-until-reset. Same lengths the Bash
+# statusline uses (5-hour and 7-day unified rate-limit windows).
+FORECAST_WINDOW_5H_SECONDS = 5 * 3600  # 18000
+FORECAST_WINDOW_7D_SECONDS = 7 * 86400  # 604800
+
 # HTTP
 INFERENCE_URL = "https://api.anthropic.com/v1/messages"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"

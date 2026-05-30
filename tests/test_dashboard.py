@@ -7,7 +7,12 @@ from rich.console import Console
 from rich.text import Text
 
 from claude_rotate.accounts import Account
-from claude_rotate.dashboard import DashboardRow, gradient_bar, render_dashboard
+from claude_rotate.dashboard import (
+    DashboardRow,
+    compute_forecast,
+    gradient_bar,
+    render_dashboard,
+)
 
 
 def test_gradient_bar_produces_text_instance() -> None:
@@ -306,3 +311,48 @@ def test_stale_footer_silent_for_ci_account() -> None:
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
     render_stale_footer(rows, console=console, now=now)
     assert console.file.getvalue() == ""
+
+
+def test_compute_forecast_5h_screenshot_value() -> None:
+    # 63% bei noch 47m Reset im 5h-Fenster (Statusline-Referenzwert → 74)
+    from claude_rotate.config import FORECAST_WINDOW_5H_SECONDS
+
+    assert compute_forecast(63.0, 47 * 60, FORECAST_WINDOW_5H_SECONDS) == 74
+
+
+def test_compute_forecast_weekly_screenshot_value() -> None:
+    # 55% bei noch 1d14h47m Reset im 7d-Fenster (Statusline-Referenzwert → 71)
+    from claude_rotate.config import FORECAST_WINDOW_7D_SECONDS
+
+    reset = (24 + 14) * 3600 + 47 * 60  # 1d14h47m
+    assert compute_forecast(55.0, reset, FORECAST_WINDOW_7D_SECONDS) == 71
+
+
+def test_compute_forecast_truncates_like_statusline() -> None:
+    # 74.70 muss zu 74 abgeschnitten werden (nicht gerundet auf 75)
+    from claude_rotate.config import FORECAST_WINDOW_5H_SECONDS
+
+    assert compute_forecast(63.0, 47 * 60, FORECAST_WINDOW_5H_SECONDS) == 74
+
+
+def test_compute_forecast_none_pct_returns_none() -> None:
+    assert compute_forecast(None, 3600, 18000) is None
+
+
+def test_compute_forecast_no_active_window_returns_none() -> None:
+    # reset_secs <= 0 → Fenster abgelaufen, keine Prognose
+    assert compute_forecast(50.0, 0, 18000) is None
+
+
+def test_compute_forecast_fresh_window_returns_none() -> None:
+    # elapsed <= 0 (reset_secs == window) → 0 verstrichen, keine Prognose
+    assert compute_forecast(50.0, 18000, 18000) is None
+
+
+def test_compute_forecast_zero_pct_returns_zero() -> None:
+    assert compute_forecast(0.0, 3600, 18000) == 0
+
+
+def test_compute_forecast_caps_at_999() -> None:
+    # Winziges elapsed → riesige Hochrechnung, gedeckelt
+    assert compute_forecast(50.0, 18000 - 60, 18000) == 999
