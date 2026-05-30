@@ -12,10 +12,10 @@
                    5h                                 weekly                             expires
 > Max-20 work      ██░░░░░░░░░░  19% [→41%]   2h 42m  ████░░░░░░░░  34% [→147%]   5d 9h 15m  22d
   Max-20 personal  ██████░░░░░░  51% [→67%]   1h 12m  ████████░░░░  67% [→106%]  2d 14h 30m   9d
-  Max-5 alt        ███████████░  88% [→96%]      25m  ███████████░  92% [→103%]     18h 45m   4d
+  Max-5 alt        ████████████ 100%             25m  ███████████░  92% [→103%]     18h 45m   4d
 ```
 
-The `[→XX%]` after each percentage is a linear forecast of where that quota lands at window reset if the current burn rate holds; hide it with `CLAUDE_ROTATE_FORECAST=0`.
+The `[→XX%]` after each percentage is a linear forecast of where that quota lands at window reset if the current burn rate holds — dropped once a window is already at/over 100% (see `Max-5 alt`'s 5h, where you're already at the wall). Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
 
 Built for developers and AI agents that burn through a single Max plan before lunch and want to keep working against Claude Code without hitting the 5-hour wall.
 
