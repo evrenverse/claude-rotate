@@ -15,7 +15,11 @@ from rich.table import Table
 from rich.text import Text
 
 from claude_rotate.accounts import Account
-from claude_rotate.config import STALE_METADATA_WARN_DAYS
+from claude_rotate.config import (
+    FORECAST_WINDOW_5H_SECONDS,
+    FORECAST_WINDOW_7D_SECONDS,
+    STALE_METADATA_WARN_DAYS,
+)
 
 _FILLED = "█"
 _EMPTY = "░"
@@ -80,6 +84,10 @@ class DashboardRow:
 # 0d, so both cells below the "weekly" header start at the same column.
 _RESET_WIDTH_5H = 6
 _RESET_WIDTH_WEEKLY = 10
+
+# Fixed slot for the forecast bracket so the reset column stays aligned across
+# rows. Widest token is " [→999%]" (leading space + 7 chars) = 8.
+_FORECAST_WIDTH = 8
 
 
 def _fmt_duration(secs: int, *, include_days: bool) -> str:
@@ -201,6 +209,8 @@ def _bar_pct_reset(
     *,
     width: int = 12,
     reset_width: int = 0,
+    forecast: int | None = None,
+    forecast_slot: int = 0,
 ) -> Text:
     """Combine gradient bar + coloured pct + fixed-width reset into one Text cell.
 
@@ -213,8 +223,8 @@ def _bar_pct_reset(
     if pct is None:
         cell.append("N/A", style="grey50")
         if reset_width:
-            # pad the rest so the following column aligns
-            cell.append(" " * (width + 5 + 2 + reset_width - len("N/A")))
+            # pad the rest so the following column aligns (incl. forecast slot)
+            cell.append(" " * (width + 5 + forecast_slot + 2 + reset_width - len("N/A")))
         return cell
 
     # Gradient bar
@@ -227,6 +237,17 @@ def _bar_pct_reset(
     prefix = "~" if from_cache else ""
     pct_str = f" {prefix}{pct:>3g}%"
     cell.append(pct_str, style=colour)
+
+    if forecast_slot:
+        if forecast is not None:
+            token = f"[→{forecast}%]"
+            cell.append(" ")
+            cell.append(token, style=_pct_color(float(forecast), width=width))
+            pad = forecast_slot - 1 - len(token)
+            if pad > 0:
+                cell.append(" " * pad)
+        else:
+            cell.append(" " * forecast_slot)
 
     reset_str = fmt_reset(reset_secs) or ""
     if reset_width:
@@ -246,6 +267,7 @@ def render_dashboard(
     chosen: str | None,
     console: Console,
     now: datetime | None = None,
+    show_forecast: bool = True,
 ) -> None:
     now = now or datetime.now(UTC)
 
@@ -262,8 +284,9 @@ def render_dashboard(
     # to their narrowest content and the "5h" / "weekly" headers drift
     # left into the label column.
     # Widths are: gradient_bar(12) + " " + pct(4) + "  " + reset(6 or 10).
-    _H5_WIDTH = 12 + 1 + 4 + 2 + _RESET_WIDTH_5H  # 25
-    _W7_WIDTH = 12 + 1 + 4 + 2 + _RESET_WIDTH_WEEKLY  # 29
+    fc_extra = _FORECAST_WIDTH if show_forecast else 0
+    _H5_WIDTH = 12 + 1 + 4 + fc_extra + 2 + _RESET_WIDTH_5H
+    _W7_WIDTH = 12 + 1 + 4 + fc_extra + 2 + _RESET_WIDTH_WEEKLY
     table = Table.grid(padding=(0, 2))
     table.add_column("label", no_wrap=True)
     table.add_column("h5_combined", no_wrap=True, min_width=_H5_WIDTH)
@@ -317,6 +340,12 @@ def render_dashboard(
             _fmt_5h,
             row.from_cache,
             reset_width=_RESET_WIDTH_5H,
+            forecast=(
+                compute_forecast(row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS)
+                if show_forecast
+                else None
+            ),
+            forecast_slot=fc_extra,
         )
         w7_cell = _bar_pct_reset(
             row.w7_pct,
@@ -324,6 +353,12 @@ def render_dashboard(
             _fmt_weekly,
             row.from_cache,
             reset_width=_RESET_WIDTH_WEEKLY,
+            forecast=(
+                compute_forecast(row.w7_pct, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
+                if show_forecast
+                else None
+            ),
+            forecast_slot=fc_extra,
         )
         exp_text, exp_style = fmt_sub_expiry(
             row.account.effective_expires_at,
