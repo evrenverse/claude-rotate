@@ -190,7 +190,9 @@ def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> in
     Truncates exactly like the Bash statusline (``int(pct)`` + floor division)
     so the dashboard and statusline show the same figure for the same inputs.
     Returns ``None`` when there is no usable elapsed time (no active window or
-    a brand-new window), 0 for zero usage, and caps the result at 999.
+    a brand-new window) or when usage is already at/over the limit (``pct >=
+    100`` — the projection would only be noise), 0 for zero usage, and caps the
+    result at 999.
     """
     if pct is None or reset_secs <= 0:
         return None
@@ -199,6 +201,8 @@ def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> in
         return None
     if pct <= 0:
         return 0
+    if pct >= 100:
+        return None
     return min(999, int(pct) * window_secs // elapsed)
 
 

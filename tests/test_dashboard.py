@@ -446,3 +446,31 @@ def test_status_json_forecast_null_for_error_rows() -> None:
     acct = status_json(rows, chosen=None)["accounts"][0]
     assert acct["h5_forecast_pct"] is None
     assert acct["w7_forecast_pct"] is None
+
+
+def test_compute_forecast_hidden_at_or_above_100pct() -> None:
+    # At/over the limit the projection is noise — suppress it.
+    assert compute_forecast(100.0, 3600, 18000) is None
+    assert compute_forecast(101.0, 3600, 18000) is None
+
+
+def test_compute_forecast_shown_just_below_100pct() -> None:
+    # 99% bei noch 1h im 5h-Fenster: elapsed=14400 → 99*18000//14400 = 123
+    assert compute_forecast(99.0, 3600, 18000) == 123
+
+
+def test_render_omits_forecast_when_already_maxed() -> None:
+    # Beide Fenster >= 100% → keine Prognose-Klammer
+    rows = [_row(_acc("main"), h5_pct=100.0, h5_secs=3600, w7_pct=101.0, w7_secs=86400)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console)
+    assert "→" not in console.file.getvalue()
+
+
+def test_status_json_forecast_null_when_maxed() -> None:
+    from claude_rotate.dashboard import status_json
+
+    rows = [_row(_acc("main"), h5_pct=100.0, h5_secs=3600, w7_pct=101.0, w7_secs=86400)]
+    acct = status_json(rows, chosen="main")["accounts"][0]
+    assert acct["h5_forecast_pct"] is None
+    assert acct["w7_forecast_pct"] is None
