@@ -11,6 +11,7 @@ the user's dashboards, /resume and stats keep working unchanged.
 Validated 2026-05-25 (Claude Code 2.1.150): Claude writes shared files
 in-place through the symlink, so the links survive.
 """
+
 from __future__ import annotations
 
 import contextlib

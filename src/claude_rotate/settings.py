@@ -4,6 +4,7 @@ Two opt-in toggles, both OFF by default. A missing or corrupt config.json
 yields defaults, so installs that never configure anything keep the exact
 pre-feature behaviour.
 """
+
 from __future__ import annotations
 
 import json

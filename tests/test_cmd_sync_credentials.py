@@ -87,20 +87,26 @@ def test_sync_credentials_isolated_path(rotate_dir: Path) -> None:
     p = paths()
     save_config(p, RotateConfig(session_isolation=True))
     store = Store(p)
-    store.save({
-        "matri": Account(
-            name="matri", runtime_token="sk-ant-oat01-OLD", label="matri",
-            created_at=datetime(2026, 4, 23, tzinfo=UTC), plan="max_20x",
-            refresh_token="r-OLD",
-            runtime_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
-            refresh_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
-        )
-    })
+    store.save(
+        {
+            "matri": Account(
+                name="matri",
+                runtime_token="sk-ant-oat01-OLD",
+                label="matri",
+                created_at=datetime(2026, 4, 23, tzinfo=UTC),
+                plan="max_20x",
+                refresh_token="r-OLD",
+                runtime_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
+                refresh_token_obtained_at=datetime(2026, 4, 23, tzinfo=UTC),
+            )
+        }
+    )
     cfg_dir = p.account_configs_dir / "matri"
     cfg_dir.mkdir(parents=True)
     write_credentials(
-        CredentialsPayload("sk-ant-oat01-NEW", "r-NEW", 1_700_000_000_000,
-                           ["user:inference"], "max", None),
+        CredentialsPayload(
+            "sk-ant-oat01-NEW", "r-NEW", 1_700_000_000_000, ["user:inference"], "max", None
+        ),
         config_dir=cfg_dir,
     )
 

@@ -20,8 +20,7 @@ def test_load_config_reads_existing(rotate_dir: Path) -> None:
     p = paths()
     p.config_dir.mkdir(parents=True, exist_ok=True)
     p.config_file.write_text(
-        '{"session_isolation": true, '
-        '"auto_resume": {"enabled": true, "message": "go on"}}\n'
+        '{"session_isolation": true, "auto_resume": {"enabled": true, "message": "go on"}}\n'
     )
     cfg = load_config(p)
     assert cfg.session_isolation is True
