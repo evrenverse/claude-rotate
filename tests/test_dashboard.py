@@ -356,3 +356,49 @@ def test_compute_forecast_zero_pct_returns_zero() -> None:
 def test_compute_forecast_caps_at_999() -> None:
     # Winziges elapsed → riesige Hochrechnung, gedeckelt
     assert compute_forecast(50.0, 18000 - 60, 18000) == 999
+
+
+def test_render_shows_forecast_bracket_by_default() -> None:
+    # 50% bei noch 1h (3600s) im 5h-Fenster: elapsed=14400 → 50*18000//14400 = 62
+    rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console)
+    out = console.file.getvalue()
+    assert "→62%" in out
+
+
+def test_render_omits_forecast_when_disabled() -> None:
+    rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console, show_forecast=False)
+    out = console.file.getvalue()
+    assert "→" not in out
+
+
+def test_render_no_forecast_for_elapsed_window() -> None:
+    # reset_secs == window → frisches Fenster, keine Prognose, aber kein Crash
+    rows = [_row(_acc("main"), h5_pct=10.0, h5_secs=18000, w7_pct=10.0, w7_secs=604800)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console)
+    out = console.file.getvalue()
+    assert "→" not in out
+
+
+def test_render_forecast_keeps_expires_column_aligned() -> None:
+    # Eine Zeile mit Prognose, eine ohne (frisches Fenster) — die expires-Spalte
+    # (Tag-Werte) muss in beiden Zeilen an derselben Spalte enden.
+    fixed_now = datetime(2026, 4, 22, tzinfo=UTC)
+    rows = [
+        _row(_acc("a", sub_days=30), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400),
+        _row(_acc("b", sub_days=19), h5_pct=10.0, h5_secs=18000, w7_pct=10.0, w7_secs=604800),
+    ]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="a", console=console, now=fixed_now)
+    lines = [
+        ln
+        for ln in console.file.getvalue().splitlines()
+        if "d" in ln and ("30d" in ln or "19d" in ln)
+    ]
+    assert len(lines) == 2
+    # rstrip-Länge identisch → beide Zeilen enden an derselben Spalte
+    assert len(lines[0].rstrip()) == len(lines[1].rstrip())
