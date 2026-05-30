@@ -402,3 +402,26 @@ def test_render_forecast_keeps_expires_column_aligned() -> None:
     assert len(lines) == 2
     # rstrip-Länge identisch → beide Zeilen enden an derselben Spalte
     assert len(lines[0].rstrip()) == len(lines[1].rstrip())
+
+
+def test_forecast_enabled_default_true(monkeypatch) -> None:
+    from claude_rotate.dashboard import forecast_enabled
+
+    monkeypatch.delenv("CLAUDE_ROTATE_FORECAST", raising=False)
+    assert forecast_enabled() is True
+
+
+def test_forecast_enabled_off_when_zero(monkeypatch) -> None:
+    from claude_rotate.dashboard import forecast_enabled
+
+    monkeypatch.setenv("CLAUDE_ROTATE_FORECAST", "0")
+    assert forecast_enabled() is False
+
+
+def test_forecast_enabled_on_for_other_values(monkeypatch) -> None:
+    from claude_rotate.dashboard import forecast_enabled
+
+    monkeypatch.setenv("CLAUDE_ROTATE_FORECAST", "1")
+    assert forecast_enabled() is True
+    monkeypatch.setenv("CLAUDE_ROTATE_FORECAST", "yes")
+    assert forecast_enabled() is True

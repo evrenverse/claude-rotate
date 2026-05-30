@@ -555,3 +555,53 @@ def test_doctor_warns_on_stale_refresh_token(tmp_path, monkeypatch, capsys) -> N
     err = capsys.readouterr().err
     assert "refresh_token" in err.lower() or "refresh" in err.lower()
     assert "stale" in err.lower() or "20d" in err
+
+
+def test_status_forecast_env_off_passes_show_forecast_false(tmp_path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    from claude_rotate.selection import Candidate
+
+    cand = Candidate(
+        account=_acc(), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+    captured: dict[str, object] = {}
+
+    def fake_render(rows, *, chosen, console, **kwargs):
+        captured["show_forecast"] = kwargs.get("show_forecast")
+
+    monkeypatch.setenv("CLAUDE_ROTATE_FORECAST", "0")
+    monkeypatch.setattr("claude_rotate.commands.status.probe_many", lambda accts: [cand])
+    monkeypatch.setattr("claude_rotate.commands.status.render_dashboard", fake_render)
+
+    from claude_rotate.commands import status
+
+    status.execute(p, as_json=False)
+    assert captured["show_forecast"] is False
+
+
+def test_status_forecast_env_default_on(tmp_path, monkeypatch) -> None:
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    from claude_rotate.selection import Candidate
+
+    cand = Candidate(
+        account=_acc(), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+    captured: dict[str, object] = {}
+
+    def fake_render(rows, *, chosen, console, **kwargs):
+        captured["show_forecast"] = kwargs.get("show_forecast")
+
+    monkeypatch.delenv("CLAUDE_ROTATE_FORECAST", raising=False)
+    monkeypatch.setattr("claude_rotate.commands.status.probe_many", lambda accts: [cand])
+    monkeypatch.setattr("claude_rotate.commands.status.render_dashboard", fake_render)
+
+    from claude_rotate.commands import status
+
+    status.execute(p, as_json=False)
+    assert captured["show_forecast"] is True
