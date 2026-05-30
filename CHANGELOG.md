@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-30
+
+### Added
+
+- **Quota forecast in the status dashboard.** Each 5-hour and weekly bar in
+  `claude-rotate status` (and the dashboard shown while wrapping `claude`) now
+  renders a linear projection `[→XX%]` of where that quota lands at window
+  reset if the current burn rate holds — the same math as the companion Bash
+  statusline. The projection is dropped once a window is already at/over 100%
+  (it would only be noise) and capped at 999%. Disable it with
+  `CLAUDE_ROTATE_FORECAST=0`. The same figures are exposed in
+  `claude-rotate status --json` as `h5_forecast_pct` / `w7_forecast_pct`
+  (always present, independent of the env toggle).
+
 ## [0.1.1] - 2026-05-26
 
 ### Fixed
