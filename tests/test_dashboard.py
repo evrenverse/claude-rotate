@@ -425,3 +425,24 @@ def test_forecast_enabled_on_for_other_values(monkeypatch) -> None:
     assert forecast_enabled() is True
     monkeypatch.setenv("CLAUDE_ROTATE_FORECAST", "yes")
     assert forecast_enabled() is True
+
+
+def test_status_json_includes_forecast_fields() -> None:
+    from claude_rotate.dashboard import status_json
+
+    # 50% bei noch 1h im 5h-Fenster → 62; 20% bei noch 1d im 7d-Fenster
+    rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400)]
+    payload = status_json(rows, chosen="main")
+    acct = payload["accounts"][0]
+    assert acct["h5_forecast_pct"] == 62
+    # 7d: elapsed = 604800 - 86400 = 518400 → 20*604800//518400 = 23
+    assert acct["w7_forecast_pct"] == 23
+
+
+def test_status_json_forecast_null_for_error_rows() -> None:
+    from claude_rotate.dashboard import status_json
+
+    rows = [_row(_acc("main"), h5_pct=None, w7_pct=None, status="relogin")]
+    acct = status_json(rows, chosen=None)["accounts"][0]
+    assert acct["h5_forecast_pct"] is None
+    assert acct["w7_forecast_pct"] is None

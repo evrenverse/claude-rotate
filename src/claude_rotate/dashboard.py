@@ -441,6 +441,14 @@ def status_json(rows: list[DashboardRow], *, chosen: str | None) -> dict[str, An
                 "w7_pct": r.w7_pct,
                 "h5_reset_secs": r.h5_reset_secs,
                 "w7_reset_secs": r.w7_reset_secs,
+                # Always emitted (data, not display): the CLAUDE_ROTATE_FORECAST toggle
+                # only suppresses the human dashboard, never the machine-readable JSON.
+                "h5_forecast_pct": compute_forecast(
+                    r.h5_pct, r.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS
+                ),
+                "w7_forecast_pct": compute_forecast(
+                    r.w7_pct, r.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS
+                ),
                 "status": r.status,
                 "note": r.note,
                 "from_cache": r.from_cache,
