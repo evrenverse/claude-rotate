@@ -21,6 +21,7 @@ from claude_rotate.accounts import Store
 from claude_rotate.config import Paths
 from claude_rotate.dashboard import (
     DashboardRow,
+    forecast_enabled,
     render_dashboard,
     render_stale_footer,
     status_json,
@@ -237,7 +238,7 @@ def execute(paths: Paths, *, as_json: bool) -> int:
         print(_json.dumps(status_json(rows, chosen=chosen), indent=2))
     else:
         console = Console(file=sys.stderr)
-        render_dashboard(rows, chosen=chosen, console=console)
+        render_dashboard(rows, chosen=chosen, console=console, show_forecast=forecast_enabled())
         render_stale_footer(rows, console=console)
 
     if relogin_count > 0:

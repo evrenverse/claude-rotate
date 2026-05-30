@@ -14,6 +14,7 @@ from claude_rotate.config import Paths
 from claude_rotate.dashboard import (
     DashboardRow,
     compact_one_liner,
+    forecast_enabled,
     render_dashboard,
     render_stale_footer,
 )
@@ -267,7 +268,7 @@ def _emit_rows(
                 console.print(compact_one_liner(row))
                 return
         return
-    render_dashboard(rows, chosen=chosen, console=console)
+    render_dashboard(rows, chosen=chosen, console=console, show_forecast=forecast_enabled())
     render_stale_footer(rows, console=console)
     if wait_msg:
         console.print(f"  [yellow]⏳ {wait_msg}[/]")

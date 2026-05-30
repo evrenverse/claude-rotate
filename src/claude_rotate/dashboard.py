@@ -6,6 +6,7 @@ footers, and non-TTY mode on top.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -199,6 +200,15 @@ def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> in
     if pct <= 0:
         return 0
     return min(999, int(pct) * window_secs // elapsed)
+
+
+def forecast_enabled() -> bool:
+    """Whether the status dashboard renders the [→XX%] forecast.
+
+    On by default; ``CLAUDE_ROTATE_FORECAST=0`` disables it. Mirrors the toggle
+    in the separate (external) Bash statusline project so the two UIs agree.
+    """
+    return os.environ.get("CLAUDE_ROTATE_FORECAST", "1") != "0"
 
 
 def _bar_pct_reset(
