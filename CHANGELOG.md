@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-05
+
+### Added
+
+- **`claude-rotate status --report`** — a compact, single-table account
+  overview complementing the rich dashboard. It marks the account this session
+  runs on (`@`), the rotator's next pick (`>`), or both (`@>`); shows each
+  account's 5-hour and weekly usage, resets (absolute clock + weekday when on
+  another day + relative), and days left on the subscription; and surfaces
+  warnings (weekly ≥ 90 %, forecast > 100 %, expiry < 7 days, re-login needed)
+  plus the freest fallback account. Output is fenced as a Markdown code block
+  when captured (e.g. by the skill) and clean when run in a terminal.
+- **Bundled agent skill + `claude-rotate install-skill`.** Installs an
+  `account` skill (a thin wrapper around `status --report`) so coding agents can
+  report the active account and limits on demand. It is written once to the
+  shared store `~/.agents/skills/account` and symlinked into every detected
+  agent — Claude Code, Codex, Gemini, and opencode. `--uninstall` removes the
+  symlinks and the canonical copy. The skill ships as package data.
+
 ## [0.2.0] - 2026-05-30
 
 ### Added
