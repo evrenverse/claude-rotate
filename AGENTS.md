@@ -34,9 +34,15 @@ instructions in claude-rotate's AGENTS.md exactly. Specifically:
    authoritative in accounts.json:
      claude-rotate install-sync
    Confirm with:  crontab -l | grep claude-rotate
-8. Run `claude-rotate list` and `claude-rotate status` — report back.
-9. If anything errors, stop and show me the full error; do not retry
-   blindly.
+8. (Optional) Install the bundled agent skill so coding agents can report the
+   active account and limits on demand. It is written once to
+   ~/.agents/skills/account and symlinked into every detected agent
+   (Claude Code, Codex, Gemini, opencode):
+     claude-rotate install-skill
+   Then `/account` works inside those agents.
+9. Run `claude-rotate list` and `claude-rotate status` — report back.
+10. If anything errors, stop and show me the full error; do not retry
+    blindly.
 
 Never write a token value into a config file, shell history, git, or chat
 transcript.
@@ -67,5 +73,6 @@ After setup the agent should confirm each of these:
 - [ ] `claude-rotate list` shows every logged-in account.
 - [ ] `claude-rotate status` shows live quota bars for every account.
 - [ ] `crontab -l | grep -q '\[claude-rotate:sync\]'` confirms the 2-minute sync job is installed.
+- [ ] (optional) `claude-rotate install-skill` wrote `~/.agents/skills/account/SKILL.md` and symlinked it into each detected agent.
 
 If any of these fail, report the exact output and stop — do not try to "fix" it by guessing.

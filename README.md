@@ -80,6 +80,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate login <email> <handle> --from-env` / `--token-file <path>` | Headless login (no browser) from `CLAUDE_ROTATE_TOKEN` / a token file — grants inference-only scope |
 | `claude-rotate list` | Show configured accounts (no network) |
 | `claude-rotate status` | Live dashboard + health exit code |
+| `claude-rotate status --report` | Compact single-table overview: running account (`@`), next pick (`>`), per-window resets (clock + weekday + relative) and warnings |
 | `claude-rotate status --json` | Machine-readable state |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |
 | `claude-rotate set-expiry <name> <value>` | Override subscription expiry (`YYYY-MM-DD`, `Nd`, or `""`) |
@@ -87,11 +88,24 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
 | `claude-rotate sync-credentials` | Reconcile `~/.claude/.credentials.json` → `accounts.json` (cron entry point) |
 | `claude-rotate install-sync` / `--uninstall` | Install / remove the 2-minute sync crontab entry |
+| `claude-rotate install-skill` / `--uninstall` | Install / remove the bundled agent skill (canonical `~/.agents/skills/account`, symlinked into every detected agent) |
 | `claude-rotate cleanup [--yes]` | Delete all rotate state (accounts, cache, logs) |
 | `claude-rotate doctor` | Self-check (binary, config, tokens, refresh-token staleness) |
 | `claude-rotate config get [<key>]` / `set <key> <value>` | View / toggle features (e.g. `session_isolation`) |
 
 `<name>` accepts either the handle (`work`) or the account's email (`work@example.com`, case-insensitive).
+
+## Agent skill
+
+claude-rotate ships a small [agent skill](https://agentskills.io/specification) so coding agents can answer *"which account am I on / what are my limits"* on demand. Install it once:
+
+```sh
+claude-rotate install-skill
+```
+
+This writes the skill once to the shared store `~/.agents/skills/account` and **symlinks it into every detected agent** — Claude Code (`~/.claude/skills`), Codex (`~/.codex/skills`), Gemini (`~/.gemini/skills`), and opencode (`~/.config/opencode/skills`). A single edit then updates them all.
+
+Invoke it as `/account` (or just ask which account is active). The skill is a thin wrapper that runs `claude-rotate status --report` and shows the result — a single table marking the running account (`@`) and the next rotation pick (`>`), with per-window resets and warnings. Update it any time by re-running `install-skill`; remove it (symlinks + canonical copy) with `--uninstall`.
 
 ## How it works
 
