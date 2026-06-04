@@ -28,11 +28,13 @@ from claude_rotate.dashboard import (
 )
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import probe_many
+from claude_rotate.report import build_report
 from claude_rotate.selection import is_usable, pick_best
+from claude_rotate.sync import read_current_session
 from claude_rotate.usage_cache import UsageCache
 
 
-def execute(paths: Paths, *, as_json: bool) -> int:
+def execute(paths: Paths, *, as_json: bool, report: bool = False) -> int:
     # Best-effort metadata refresh (same as run does)
     with contextlib.suppress(Exception):
         refresh_stale_accounts(paths)
@@ -234,7 +236,15 @@ def execute(paths: Paths, *, as_json: bool) -> int:
         best, _ = pick_best(selection_pool)
         chosen = best.account.name
 
-    if as_json:
+    if report:
+        session = read_current_session(paths)
+        active = session.account_name if session is not None else None
+        # Fenced (Markdown code block) only when piped/captured — e.g. by the
+        # bundled skill, which relays the output into a chat UI. A real
+        # terminal gets the clean table without the ``` fences.
+        fenced = not sys.stdout.isatty()
+        print(build_report(rows, chosen=chosen, active=active, fenced=fenced))
+    elif as_json:
         print(_json.dumps(status_json(rows, chosen=chosen), indent=2))
     else:
         console = Console(file=sys.stderr)

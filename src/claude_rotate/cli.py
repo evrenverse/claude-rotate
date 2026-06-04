@@ -23,6 +23,7 @@ ROTATOR_COMMANDS = {
     "cleanup",
     "sync-credentials",
     "install-sync",
+    "install-skill",
     "config",
 }
 ROTATOR_ROOT_FLAGS = {"--version", "-V", "--help", "-h"}
@@ -45,6 +46,7 @@ Commands:
   cleanup      Delete all claude-rotate state (accounts, cache, logs)
   sync-credentials   Reconcile ~/.claude/.credentials.json → accounts.json (cron entry point)
   install-sync       Install a crontab entry running sync-credentials every 2 minutes
+  install-skill      Install the bundled Claude Code skill into ~/.claude/skills
 
 Options:
   -h, --help           Show this help
@@ -128,7 +130,23 @@ Show the quota dashboard for all configured accounts.\
 
 _STATUS_EPILOG = """\
 Options:
+  --report             Compact single-table overview (active account + limits +
+                       warnings); marks the running account (@) and next pick (>)
   --json               Output JSON instead of the coloured table
+  -h, --help           Show this help\
+"""
+
+_INSTALL_SKILL_DESCRIPTION = """\
+Install the bundled Claude Code skill into ~/.claude/skills.
+
+Writes the 'account' skill (a thin wrapper around `claude-rotate status
+--report`) so Claude Code can answer "which account am I on / what are my
+limits" on demand. Idempotent; re-run to update.\
+"""
+
+_INSTALL_SKILL_EPILOG = """\
+Options:
+  --uninstall          Remove the installed skill instead
   -h, --help           Show this help\
 """
 
@@ -322,6 +340,7 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=fmt,
         add_help=False,
     )
+    sp_status.add_argument("--report", action="store_true", help=_SUPPRESS)
     sp_status.add_argument("--json", action="store_true", help=_SUPPRESS)
     sp_status.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
@@ -381,6 +400,19 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_install.add_argument("--uninstall", action="store_true", help=_SUPPRESS)
     sp_install.add_argument("-h", "--help", action="help", help=_SUPPRESS)
+
+    # install-skill
+    sp_install_skill = sub.add_parser(
+        "install-skill",
+        help="Install the bundled Claude Code skill",
+        usage="claude-rotate install-skill [--uninstall]",
+        description=_INSTALL_SKILL_DESCRIPTION,
+        epilog=_INSTALL_SKILL_EPILOG,
+        formatter_class=fmt,
+        add_help=False,
+    )
+    sp_install_skill.add_argument("--uninstall", action="store_true", help=_SUPPRESS)
+    sp_install_skill.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
     # config — feature toggles in config.json
     sp_config = sub.add_parser(
@@ -449,7 +481,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             from claude_rotate.commands import status
 
-            return status.execute(p, as_json=args.json)
+            return status.execute(p, as_json=args.json, report=args.report)
         if args.command == "doctor":
             from claude_rotate.commands import doctor
 
@@ -470,6 +502,10 @@ def main(argv: list[str] | None = None) -> int:
             from claude_rotate.commands import install_sync
 
             return install_sync.execute(p, uninstall=args.uninstall)
+        if args.command == "install-skill":
+            from claude_rotate.commands import install_skill
+
+            return install_skill.execute(p, uninstall=args.uninstall)
         if args.command == "config":
             from claude_rotate.commands import config as config_cmd
 
