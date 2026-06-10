@@ -29,6 +29,11 @@ EXPIRY_URGENT_DAYS = 3
 EXPIRY_SOON_DAYS = 10
 SOON_QUOTA_CEILING_PERCENT = 70.0
 BALANCE_THRESHOLD_PERCENT = 30.0
+# The 5h burn-pace dampener needs a minimum observation period before its
+# rate estimate means anything — 3% burned two minutes into a window
+# projects >100% numerically but is pure noise (one short session or a
+# probe burst). Below this elapsed time only the level dampener applies.
+PACE_MIN_ELAPSED_SECONDS = 900
 METADATA_REFRESH_DAYS = 7
 STALE_METADATA_WARN_DAYS = 10
 

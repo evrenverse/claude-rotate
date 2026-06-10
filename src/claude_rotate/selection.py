@@ -17,6 +17,7 @@ from claude_rotate.config import (
     EXPIRY_URGENT_DAYS,
     FORECAST_WINDOW_5H_SECONDS,
     HEADROOM_PERCENT,
+    PACE_MIN_ELAPSED_SECONDS,
     SOON_QUOTA_CEILING_PERCENT,
 )
 
@@ -37,6 +38,9 @@ class Candidate:
     h5_reset_secs: int
     w7_reset_secs: int
     probe_error: str = ""
+    # Opus 7d bucket from the OAuth usage endpoint; None when only the
+    # inference rate-limit headers were available.
+    w7_opus_pct: float | None = None
 
     def subscription_expiry_seconds(self, now: datetime | None = None) -> int | None:
         # effective_expires_at: manual override wins over API-derived
@@ -55,6 +59,7 @@ def candidate_from_account(
     h5_reset_secs: int,
     w7_reset_secs: int,
     probe_error: str = "",
+    w7_opus_pct: float | None = None,
 ) -> Candidate:
     return Candidate(
         account=account,
@@ -63,6 +68,7 @@ def candidate_from_account(
         h5_reset_secs=h5_reset_secs,
         w7_reset_secs=w7_reset_secs,
         probe_error=probe_error,
+        w7_opus_pct=w7_opus_pct,
     )
 
 
@@ -193,17 +199,31 @@ def _h5_pace_share(c: Candidate) -> float:
     """
     if c.h5_pct is None or c.h5_pct <= 0.0 or c.h5_reset_secs <= 0:
         return 1.0
+    elapsed_secs = FORECAST_WINDOW_5H_SECONDS - c.h5_reset_secs
+    if elapsed_secs < PACE_MIN_ELAPSED_SECONDS:
+        return 1.0
     remaining = min(1.0, c.h5_reset_secs / FORECAST_WINDOW_5H_SECONDS)
     elapsed = 1.0 - remaining
-    if elapsed <= 0.0:
-        return 1.0
     used = c.h5_pct / 100.0
     headroom = max(0.0, HEADROOM_PERCENT - c.h5_pct) / 100.0
     return min(1.0, (headroom * elapsed) / (used * remaining))
 
 
+def _opus_availability(c: Candidate) -> float:
+    """Headroom fraction of the Opus 7d bucket (1.0 when unknown).
+
+    The unified 7d window is the hard wall, but sessions are Opus-first: an
+    account whose Opus bucket is nearly capped degrades to non-Opus work even
+    with plenty of unified headroom, so it dampens the score the same way a
+    nearly capped 5h window does.
+    """
+    if c.w7_opus_pct is None:
+        return 1.0
+    return max(0.0, HEADROOM_PERCENT - c.w7_opus_pct) / 100.0
+
+
 def _drain_urgency_score(c: Candidate) -> float:
-    return _weekly_urgency(c) * _h5_availability(c)
+    return _weekly_urgency(c) * _h5_availability(c) * _opus_availability(c)
 
 
 def _pick_tier3(usable: list[Candidate]) -> Candidate:
