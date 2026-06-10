@@ -23,7 +23,6 @@ from datetime import UTC, datetime
 from claude_rotate.config import Paths
 from claude_rotate.settings import load_config
 from claude_rotate.sync import (
-    mirror_session_to_global,
     reconcile_all,
     reconcile_isolated,
     refresh_stale_tokens,
@@ -34,13 +33,17 @@ def execute(paths: Paths) -> int:
     now = datetime.now(UTC)
 
     if load_config(paths).session_isolation:
+        # Isolation mode never touches the default ~/.claude/.credentials.json.
+        # It previously mirrored the last-launched account's token there for
+        # headless consumers — but that silently switched RUNNING headless
+        # sessions (which re-read the file every turn) to a different account
+        # whenever a new interactive session launched, invalidating their
+        # org-scoped prompt cache. Headless consumers must pin an account via
+        # CLAUDE_CONFIG_DIR=<configs>/<account> instead; those dirs stay fresh
+        # through refresh_stale_tokens below.
         synced_names = reconcile_isolated(paths, now=now)
         refreshed = refresh_stale_tokens(paths, now=now, isolated=True)
-        # Keep the default ~/.claude/.credentials.json fresh so headless consumers
-        # (CI, the enniflow worker) that never set CLAUDE_CONFIG_DIR still boot with
-        # a live token instead of the frozen, expired isolation-mode leftover.
-        mirrored = mirror_session_to_global(paths, now=now)
-        if synced_names or refreshed or mirrored:
+        if synced_names or refreshed:
             stamp = datetime.now(UTC).isoformat(timespec="seconds")
             if synced_names:
                 names = ", ".join(synced_names)
@@ -48,8 +51,6 @@ def execute(paths: Paths) -> int:
             if refreshed:
                 names = ", ".join(refreshed)
                 print(f"[{stamp}] refreshed {len(refreshed)} stale account(s): {names}")
-            if mirrored:
-                print(f"[{stamp}] mirrored global fallback credentials: {mirrored}")
         return 0
 
     synced = reconcile_all(paths, now=now)

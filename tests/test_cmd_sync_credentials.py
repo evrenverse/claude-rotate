@@ -128,40 +128,14 @@ def _isolated_account(now: datetime) -> Account:
     )
 
 
-def test_isolated_sync_mirrors_session_creds_to_global_fallback(tmp_path, monkeypatch) -> None:
-    """Isolation mode keeps ~/.claude/.credentials.json fresh for headless
-    consumers (CI scripts, the enniflow worker) that never set CLAUDE_CONFIG_DIR
-    and therefore read the default config dir. The mirror carries full session
-    scopes but strips the refresh token, so a headless `claude` can never
-    double-spend the family's refresh token (nothing reconciles the global file
-    back in isolation mode).
-    """
-    _fake_home(tmp_path, monkeypatch)
-    p = _paths(tmp_path)
-    save_config(p, RotateConfig(session_isolation=True))
+def test_isolated_sync_never_touches_global_credentials(tmp_path, monkeypatch) -> None:
+    """Isolation mode must NEVER create or rewrite ~/.claude/.credentials.json.
 
-    now = datetime.now(UTC)
-    acct = _isolated_account(now)
-    Store(p).save({"matri": acct})
-    write_current_session(p, CurrentSession(account_name="matri"))
-
-    # The global fallback starts empty (this is exactly the stale-token bug).
-    assert CredentialsFile().read() is None
-
-    assert execute(p) == 0
-
-    mirrored = CredentialsFile().read()
-    assert mirrored is not None, "isolation mode must keep ~/.claude fresh"
-    assert mirrored.access_token == acct.runtime_token
-    assert mirrored.refresh_token is None, "refresh token must be stripped"
-    assert "user:sessions:claude_code" in mirrored.scopes, "full session scope required"
-    # The real token at rest is never weakened — accounts.json keeps its refresh token.
-    assert Store(p).load()["matri"].refresh_token == acct.refresh_token
-
-
-def test_isolated_mirror_skips_rewrite_when_global_already_current(tmp_path, monkeypatch) -> None:
-    """A re-mirror with an unchanged token must not rewrite the file, so the
-    2-minute cron does not churn the global credentials file on every tick.
+    The former global mirror silently switched RUNNING headless sessions
+    (which re-read the file every turn) to whichever account was launched
+    last, invalidating their org-scoped prompt cache mid-run. Headless
+    consumers pin an account via CLAUDE_CONFIG_DIR=<configs>/<account>;
+    the default config dir is out of bounds for the rotator in this mode.
     """
     home = _fake_home(tmp_path, monkeypatch)
     p = _paths(tmp_path)
@@ -172,9 +146,14 @@ def test_isolated_mirror_skips_rewrite_when_global_already_current(tmp_path, mon
     write_current_session(p, CurrentSession(account_name="matri"))
 
     global_file = home / ".claude" / ".credentials.json"
-    assert execute(p) == 0  # first tick → writes the global fallback
-    mtime_after_first = global_file.stat().st_mtime_ns
 
-    assert execute(p) == 0  # second tick → token unchanged, must be a no-op
-    mtime_after_second = global_file.stat().st_mtime_ns
-    assert mtime_after_second == mtime_after_first
+    # Absent → the tick must not create it.
+    assert execute(p) == 0
+    assert not global_file.exists(), "isolation mode created the global file"
+
+    # Present with foreign content (a manual non-rotate login) → untouched.
+    global_file.write_text('{"claudeAiOauth": {"accessToken": "manual-login"}}')
+    mtime_before = global_file.stat().st_mtime_ns
+    assert execute(p) == 0
+    assert global_file.stat().st_mtime_ns == mtime_before
+    assert "manual-login" in global_file.read_text()
