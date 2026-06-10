@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Global credentials mirror in isolation mode.** The sync cron no longer
+  mirrors the most recently launched account's access token into the global
+  `~/.claude/.credentials.json`. The mirror re-pointed *running* headless
+  sessions (which re-read the credentials file every turn) at a different
+  account whenever a new interactive session launched — invalidating their
+  org-scoped prompt cache mid-run and re-billing the full context of every
+  active session. In isolation mode the rotator now never writes the global
+  file; headless consumers pin an account via
+  `CLAUDE_CONFIG_DIR=~/.config/claude-rotate/configs/<account>`, which the
+  cron keeps fresh.
+
 ## [0.3.0] - 2026-06-05
 
 ### Added
