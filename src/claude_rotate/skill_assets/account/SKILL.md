@@ -13,8 +13,9 @@ of every configured account, via `claude-rotate`.
 ## How to run
 
 Run the command and show its output to the user **verbatim** — it is already
-formatted (a status line, a bordered table, and warnings). Do not reformat,
-re-wrap the table, summarize, or add commentary.
+formatted (a status line, one fenced block per account, and warnings). Keep
+every code fence intact so each account stays its own card. Do not reformat,
+merge the blocks, summarize, or add commentary.
 
 ```bash
 claude-rotate status --report
@@ -27,9 +28,18 @@ as-is. Never fabricate numbers.
 
 - **Markers**: `@` = the account this session runs on; `>` = the account the
   rotator would pick next; `@>` = both (no rotation on the next launch).
-- **One table, all accounts**: 5h % and reset, weekly % and reset, and days
-  left on the subscription. Reset cells show the absolute clock (plus a weekday
-  when it lands on another day) and the relative time, e.g. `Sun 09:00 (2d 8h)`.
+- **One fenced block per account** (narrow, no table borders, readable on a
+  phone — each fence renders as its own card): a header with the account name and
+  days left on the subscription, then — per window (`5h` and `week`) — a *fact
+  line* and a *forecast sub-line* beneath it. The fact line carries a progress bar
+  (`█`/`░`), the current usage % and the reset as an absolute clock (with a
+  weekday when it lands on another day) plus a compact relative duration, e.g.
+  `Thu 13:00 (4d 20h)`. The label-less sub-line carries the projection: the
+  `→`-prefixed forecast % and, when the limit is crossed before reset, the clock
+  and relative duration at which usage hits 100% — shown as `→XX% —` when the
+  window resets first, a lone `—` when there is no trend yet, or `reached` once
+  usage is already ≥100%. Both lines share one column grid, so the forecast %
+  stacks under the current % and the limit-ETA clock under the reset clock.
 - **Warnings**: weekly usage ≥ 90 %, forecast > 100 %, subscription expiring in
   under 7 days, accounts needing re-login, plus the freest fallback account.
 

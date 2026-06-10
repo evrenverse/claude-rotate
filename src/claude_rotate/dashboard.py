@@ -206,6 +206,30 @@ def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> in
     return min(999, int(pct) * window_secs // elapsed)
 
 
+def compute_limit_eta(pct: float | None, reset_secs: int, window_secs: int) -> int | None:
+    """Seconds-from-now until usage is projected to reach 100%.
+
+    Linear projection at the current rate, mirroring ``compute_forecast``'s
+    ``int(pct)`` truncation so the forecast % and this ETA stay consistent.
+    Returns ``None`` when there is no usable elapsed time (no active / brand-new
+    window), when usage is zero or already at/over the limit, or when the window
+    resets before 100% is reached (equivalently: ``compute_forecast`` would be
+    ``<= 100``, so there is no limit hit to forecast inside this window).
+    """
+    if pct is None or reset_secs <= 0:
+        return None
+    elapsed = window_secs - reset_secs
+    if elapsed <= 0:
+        return None
+    p = int(pct)
+    if p <= 0 or p >= 100:
+        return None
+    eta = (100 - p) * elapsed // p
+    if eta >= reset_secs:
+        return None  # window resets before the wall is reached
+    return eta
+
+
 def forecast_enabled() -> bool:
     """Whether the status dashboard renders the [→XX%] forecast.
 

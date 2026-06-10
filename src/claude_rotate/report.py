@@ -1,8 +1,10 @@
-"""`claude-rotate status --report` — a compact, single-table account overview.
+"""`claude-rotate status --report` — a compact, mobile-friendly account overview.
 
 Where ``render_dashboard`` (dashboard.py) is the rich, colour-bar quota view,
-this module renders a plain box-drawing table designed to be relayed verbatim
-by the bundled Claude Code skill (see ``skill_assets/account``). It answers a
+this module renders one narrow, fenced block per account — each with a plain
+ASCII progress bar — designed to be relayed verbatim by the bundled Claude Code
+skill (see ``skill_assets/account``) and to stay readable on a phone screen
+(separate code fences render as separate cards in the chat UI). It answers a
 narrower question — *which account is this session on, what are the limits, and
 what should I watch out for* — and is therefore a separate, self-contained
 renderer rather than another column on the dashboard.
@@ -14,23 +16,27 @@ Two markers identify accounts:
 * ``>`` — the account the rotator would pick on the next launch (``chosen``).
 * ``@>`` — both, i.e. the session is already on the next pick (no rotation).
 
-All values are place-value aligned: every numeric sub-field is right-padded to
-its column's widest entry, so ``23m`` sits exactly under ``53m`` and ``8h``
-under ``12h``. Reset cells follow the claude-statusline convention: absolute
-clock, plus an English weekday when the reset lands on another day, plus the
-relative duration in parentheses.
+Within each account block, every window (``5h`` and ``week``) spans two lines.
+The *fact line* aligns the progress bar, the current usage ``%`` and the reset
+(absolute clock + compact relative duration). The label-less *forecast sub-line*
+beneath it carries the projection: the forecast ``%`` and, once the limit is
+crossed before reset, the clock and relative duration at which usage hits 100%.
+Both lines share one column grid, so the forecast ``%`` stacks under the current
+``%`` and the limit-ETA clock under the reset clock; a shared weekday slot keeps
+the clocks aligned even when only the weekly reset lands on another day.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
 )
-from claude_rotate.dashboard import DashboardRow, compute_forecast
+from claude_rotate.dashboard import DashboardRow, compute_forecast, compute_limit_eta
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -40,74 +46,160 @@ _EXPIRY_WARN_DAYS = 7
 _FALLBACK_MAX_WEEK_PCT = 80.0
 
 
-def _box_table(headers: Sequence[str], rows: Sequence[Sequence[str]], aligns: Sequence[str]) -> str:
-    """Render a bordered box-drawing table; equal-width rows keep columns aligned."""
-    cols = range(len(headers))
-    widths = [len(headers[i]) for i in cols]
-    for row in rows:
-        for i in cols:
-            widths[i] = max(widths[i], len(row[i]))
+class _Cell(NamedTuple):
+    """One window's rendered strings for an account card, before column padding.
 
-    def cell(value: str, i: int) -> str:
-        return value.rjust(widths[i]) if aligns[i] == "r" else value.ljust(widths[i])
-
-    def rule(left: str, mid: str, right: str) -> str:
-        return left + mid.join("─" * (widths[i] + 2) for i in cols) + right
-
-    def line(values: Sequence[str]) -> str:
-        return "│ " + " │ ".join(cell(values[i], i) for i in cols) + " │"
-
-    parts = [rule("┌", "┬", "┐"), line(headers), rule("├", "┼", "┤")]
-    parts.extend(line(row) for row in rows)
-    parts.append(rule("└", "┴", "┘"))
-    return "\n".join(parts)
-
-
-def format_reset_column(secs_list: Sequence[int | None], *, now: datetime) -> list[str]:
-    """Format a whole reset column so every place value lines up vertically.
-
-    ``None`` entries (no data for that row) render as ``-``. The column shares
-    one structure: both fields are always shown (even ``0h``), the weekday is
-    shown for every row as soon as *any* reset lands on another day, and each
-    numeric sub-field is right-padded to the column's widest value.
+    ``special`` short-circuits the forecast sub-line: ``"reached"`` (usage already
+    ≥100%) or ``"—"`` (no trend yet). When it is ``None`` the sub-line shows the
+    ``forecast`` plus the limit ETA (``eta_clock``/``eta_rel``); ``eta_clock`` is
+    ``"—"`` when the window resets before the limit is reached.
     """
-    cleaned = [max(s, 0) if s is not None else None for s in secs_list]
-    valid = [s for s in cleaned if s is not None]
-    if not valid:
-        return ["-" for _ in secs_list]
 
-    day_scale = max(valid) >= 86400
-    resets = [now + timedelta(seconds=s) if s is not None else None for s in cleaned]
-    show_weekday = any(r is not None and r.date() != now.date() for r in resets)
+    label: str
+    pct: float | None
+    pct_str: str
+    reset_clock: str
+    reset_rel: str
+    special: str | None
+    forecast: str | None
+    eta_clock: str | None
+    eta_rel: str | None
 
-    fields: list[tuple[int, int] | None] = []
-    for s in cleaned:
-        if s is None:
-            fields.append(None)
-        elif day_scale:
-            fields.append((s // 86400, (s % 86400) // 3600))
-        else:
-            fields.append((s // 3600, (s % 3600) // 60))
-    w0 = max((len(str(f[0])) for f in fields if f is not None), default=1)
-    w1 = max((len(str(f[1])) for f in fields if f is not None), default=1)
-    unit0, unit1 = ("d", "h") if day_scale else ("h", "m")
 
-    out: list[str] = []
-    for reset, field in zip(resets, fields, strict=True):
-        if reset is None or field is None:
-            out.append("-")
-            continue
+def _render_cards(
+    ordered: Sequence[DashboardRow],
+    *,
+    active: str | None,
+    chosen: str | None,
+    now: datetime,
+    now_utc: datetime,
+) -> list[str]:
+    """Render each account as its own narrow block (one Markdown fence each).
+
+    A box-drawing table is ~60 columns wide and overflows a phone screen. Each
+    account instead becomes a self-contained block: a header carrying the markers,
+    name and remaining subscription days, then — per window (``5h`` and ``week``) —
+    a *fact line* and a label-less *forecast sub-line*.
+
+    The fact line carries what is true now: the progress bar (same ``█``/``░``
+    glyphs as ``dashboard.gradient_bar``, no colour), the current usage %, and the
+    reset (absolute clock with a shared weekday slot + a compact relative
+    duration). The sub-line beneath carries everything projected: the forecast %
+    (``→``-prefixed) and, when the limit is crossed before reset
+    (``compute_forecast >= 100``), the clock and relative duration at which usage
+    hits 100%. It collapses to ``→XX% —`` when the window resets first, a lone
+    ``—`` when there is no trend yet, or ``reached`` once usage is already ≥100%.
+
+    Both line types share one column grid (pct / clock / relative widths span
+    both), so the forecast % stacks under the current % and the limit-ETA clock
+    under the reset clock. ``build_report`` wraps each returned block in its own
+    fence so the chat UI renders them as separate cards.
+    """
+    label_width = len("week")
+    # A label-less sub-line is indented to the fact line's pct column: blank label
+    # + blank bar, with the fact line's two-space gaps.
+    sub_prefix = f"{'':<{label_width}}  {' ' * _BAR_WIDTH}  "
+
+    def reset_clock(reset_secs: int, *, show_weekday: bool) -> str:
+        reset = now + timedelta(seconds=max(reset_secs, 0))
         clock = reset.strftime("%H:%M")
         if show_weekday:
             weekday = WEEKDAYS[reset.weekday()] if reset.date() != now.date() else "   "
             clock = f"{weekday} {clock}"
-        rel = f"{field[0]:>{w0}d}{unit0} {field[1]:>{w1}d}{unit1}"
-        out.append(f"{clock} ({rel})")
-    return out
+        return clock
+
+    blocks: list[str] = []
+    for row in ordered:
+        name = row.account.name
+        marker = ("@" if name == active else " ") + (">" if name == chosen else " ")
+        head = f"{marker} {name}"
+        days = _days_left(row.account.effective_expires_at, now_utc)
+        if days != "-":
+            head += f" · {days} left"
+
+        specs = (
+            ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS),
+            ("week", row.w7_pct, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS),
+        )
+        # Show a weekday on every clock as soon as any dated reset lands on another
+        # day. A limit ETA is always earlier than its own reset, so if every reset
+        # is today every ETA is too — the resets alone decide the shared slot.
+        show_weekday = any(
+            pct is not None and (now + timedelta(seconds=max(secs, 0))).date() != now.date()
+            for _, pct, secs, _ in specs
+        )
+
+        cells: list[_Cell] = []
+        for label, pct, secs, window in specs:
+            forecast = compute_forecast(pct, secs, window)
+            if pct is not None:
+                reset_clk, reset_rel = reset_clock(secs, show_weekday=show_weekday), _rel(secs)
+            else:
+                reset_clk, reset_rel = "—", ""
+            if pct is not None and pct >= 100:
+                special, fc_str, eta_clk, eta_rel = "reached", None, None, None
+            elif pct is None or pct <= 0 or forecast is None:
+                special, fc_str, eta_clk, eta_rel = "—", None, None, None
+            else:
+                special, fc_str = None, f"→{forecast}%"
+                eta = compute_limit_eta(pct, secs, window)
+                if eta is not None:
+                    eta_clk, eta_rel = reset_clock(eta, show_weekday=show_weekday), _rel(eta)
+                else:
+                    eta_clk, eta_rel = "—", ""
+            cells.append(
+                _Cell(
+                    label, pct, _pct(pct), reset_clk, reset_rel, special, fc_str, eta_clk, eta_rel
+                )
+            )
+
+        pw = max(len(s) for c in cells for s in (c.pct_str, c.forecast) if s is not None)
+        cw = max(len(s) for c in cells for s in (c.reset_clock, c.eta_clock) if s is not None)
+        rel_vals = [s for c in cells for s in (c.reset_rel, c.eta_rel) if s is not None]
+        rw = max((len(s) for s in rel_vals), default=0)
+
+        rows_txt = [head]
+        for c in cells:
+            fact_tail = f"{c.reset_clock:>{cw}} {c.reset_rel:>{rw}}".rstrip()
+            fact = f"{c.label:<{label_width}}  {_bar(c.pct)}  {c.pct_str:>{pw}}  {fact_tail}"
+            rows_txt.append(fact.rstrip())
+            if c.special is not None:
+                rows_txt.append(f"{sub_prefix}{c.special:>{pw}}".rstrip())
+            else:
+                sub_tail = f"{c.eta_clock or '':>{cw}} {c.eta_rel or '':>{rw}}".rstrip()
+                rows_txt.append(f"{sub_prefix}{c.forecast or '':>{pw}}  {sub_tail}".rstrip())
+        blocks.append("\n".join(rows_txt))
+    return blocks
 
 
 def _pct(value: float | None) -> str:
     return f"{value:g}%" if value is not None else "N/A"
+
+
+_BAR_FILLED = "█"  # same glyphs as dashboard.gradient_bar (plain, no colour here)
+_BAR_EMPTY = "░"
+_BAR_WIDTH = 5  # half-width keeps each account line within a phone's screen width
+
+
+def _bar(pct: float | None, width: int = _BAR_WIDTH) -> str:
+    """Plain (colourless) progress bar; ``None`` (no data) renders all-empty."""
+    if pct is None:
+        return _BAR_EMPTY * width
+    filled = round(max(0.0, min(100.0, pct)) / 100 * width)
+    return _BAR_FILLED * filled + _BAR_EMPTY * (width - filled)
+
+
+def _rel(reset_secs: int) -> str:
+    """Compact relative time-to-reset in parentheses: (40m), (1h 3m), (4d 20h)."""
+    secs = max(reset_secs, 0)
+    days, rem = divmod(secs, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes = rem // 60
+    if days:
+        return f"({days}d {hours}h)"
+    if hours:
+        return f"({hours}h {minutes}m)"
+    return f"({minutes}m)"
 
 
 def _days_left(expires_at: datetime | None, now_utc: datetime) -> str:
@@ -214,33 +306,7 @@ def build_report(
 
     ordered = sorted(rows, key=sort_key)
 
-    h5_resets = format_reset_column(
-        [r.h5_reset_secs if r.h5_pct is not None else None for r in ordered], now=now
-    )
-    w7_resets = format_reset_column(
-        [r.w7_reset_secs if r.w7_pct is not None else None for r in ordered], now=now
-    )
-
-    table_rows: list[list[str]] = []
-    for row, h5_reset, w7_reset in zip(ordered, h5_resets, w7_resets, strict=True):
-        name = row.account.name
-        marker = ("@" if name == active else " ") + (">" if name == chosen else " ")
-        table_rows.append(
-            [
-                f"{marker} {name}",
-                _pct(row.h5_pct),
-                h5_reset,
-                _pct(row.w7_pct),
-                w7_reset,
-                _days_left(row.account.effective_expires_at, now_utc),
-            ]
-        )
-
-    table = _box_table(
-        ["Account", "5h", "5h reset", "Week", "Week reset", "Sub"],
-        table_rows,
-        ["l", "r", "l", "r", "l", "r"],
-    )
+    cards = _render_cards(ordered, active=active, chosen=chosen, now=now, now_utc=now_utc)
 
     lines: list[str] = [
         "Legend: @ = running in this session, > = next pick (rotation), @> = both."
@@ -248,11 +314,12 @@ def build_report(
         _status_line(active, chosen),
         "",
     ]
-    if fenced:
-        lines.append("```")
-    lines.append(table)
-    if fenced:
-        lines.append("```")
-    lines.append("")
+    for card in cards:
+        if fenced:
+            lines.append("```")
+        lines.append(card)
+        if fenced:
+            lines.append("```")
+        lines.append("")  # blank line between blocks (and before the warnings)
     lines.extend(_warnings(ordered, active=active, now_utc=now_utc))
     return "\n".join(lines)
