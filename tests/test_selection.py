@@ -220,6 +220,29 @@ def test_tier3_real_world_regression_soon_resetting_weekly_wins() -> None:
     assert chosen.account is stamp.account
 
 
+def test_tier3_hot_young_5h_window_yields_to_fresh_accounts() -> None:
+    # 2026-06-10 live snapshot (afternoon): stamp burned 47% of its 5h budget
+    # in the first ~20 minutes of the window (4h41m until reset — projection
+    # →764%). Its weekly resets in 23h41m, so pure weekly urgency would pick
+    # it, but at that pace it walls within minutes and then stalls for hours
+    # while grace/matri sit on fresh 5h windows. The pace dampener must hand
+    # the pick over; stamp gets drained again once its 5h window resets.
+    stamp = _cand(h5=47.0, w7=35.0, h5_secs=16860, w7_secs=85260)
+    grace = _cand(h5=0.0, w7=28.0, h5_secs=16860, w7_secs=330060)
+    matri = _cand(h5=0.0, w7=30.0, h5_secs=16860, w7_secs=394860, expires_days=8)
+    chosen, _ = pick_best([stamp, grace, matri], now=FIXED_NOW)
+    assert chosen.account is grace.account
+
+
+def test_tier3_same_usage_near_5h_reset_keeps_drain_priority() -> None:
+    # Same 47% 5h usage, but the window resets in 20 minutes — the burned
+    # budget is about to come back, so weekly drain urgency must still win.
+    stamp = _cand(h5=47.0, w7=35.0, h5_secs=1200, w7_secs=85260)
+    grace = _cand(h5=0.0, w7=28.0, h5_secs=1200, w7_secs=330060)
+    chosen, _ = pick_best([stamp, grace], now=FIXED_NOW)
+    assert chosen.account is stamp.account
+
+
 def test_tier3_near_capped_5h_dampens_equal_weekly_urgency() -> None:
     # Equal weekly urgency → the account that can actually work right now
     # (more 5h headroom) wins.
