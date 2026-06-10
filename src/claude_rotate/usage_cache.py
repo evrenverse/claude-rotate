@@ -55,10 +55,15 @@ class UsageCache:
 
         h5_pct = raw.get("h5_pct")
         w7_pct = raw.get("w7_pct")
+        w7_opus_pct = raw.get("w7_opus_pct")
         if h5_pct is not None and h5_secs == 0:
             h5_pct = 0.0
         if w7_pct is not None and w7_secs == 0:
             w7_pct = 0.0
+        if w7_opus_pct is not None and w7_secs == 0:
+            # The Opus bucket lives inside the 7d cadence; once the weekly
+            # window elapsed its usage has reset as well.
+            w7_opus_pct = 0.0
 
         return ProbeResult(
             ok=True,
@@ -67,6 +72,7 @@ class UsageCache:
             w7_pct=w7_pct,
             h5_reset_secs=h5_secs,
             w7_reset_secs=w7_secs,
+            w7_opus_pct=w7_opus_pct,
         )
 
     def save(self, name: str, result: ProbeResult) -> None:
@@ -79,6 +85,7 @@ class UsageCache:
             "http_code": result.http_code,
             "h5_pct": result.h5_pct,
             "w7_pct": result.w7_pct,
+            "w7_opus_pct": result.w7_opus_pct,
             "h5_reset_at": now + result.h5_reset_secs,
             "w7_reset_at": now + result.w7_reset_secs,
         }

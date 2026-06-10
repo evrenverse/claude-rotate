@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from claude_rotate.accounts import Account
@@ -234,6 +235,17 @@ def test_tier3_hot_young_5h_window_yields_to_fresh_accounts() -> None:
     assert chosen.account is grace.account
 
 
+def test_tier3_young_window_low_use_not_pace_dampened() -> None:
+    # A window opened 2 minutes ago with 3% used projects >100% numerically,
+    # but that pace estimate is pure noise (one short session / probe burst).
+    # Below the minimum elapsed time only the level dampener applies, so the
+    # account with the far more urgent weekly reset must still win.
+    hot_weekly = _cand(h5=3.0, w7=35.0, h5_secs=17880, w7_secs=85260)
+    fresh = _cand(h5=0.0, w7=28.0, h5_secs=17880, w7_secs=330060)
+    chosen, _ = pick_best([hot_weekly, fresh], now=FIXED_NOW)
+    assert chosen.account is hot_weekly.account
+
+
 def test_tier3_same_usage_near_5h_reset_keeps_drain_priority() -> None:
     # Same 47% 5h usage, but the window resets in 20 minutes — the burned
     # budget is about to come back, so weekly drain urgency must still win.
@@ -250,6 +262,28 @@ def test_tier3_near_capped_5h_dampens_equal_weekly_urgency() -> None:
     free = _cand(plan="max_20x", h5=10.0, w7=20.0, h5_secs=7200, w7_secs=86400)
     chosen, _ = pick_best([blocked, free], now=FIXED_NOW)
     assert chosen.account is free.account
+
+
+def test_tier3_capped_opus_weekly_dampens_equal_weekly_urgency() -> None:
+    # Equal unified urgency, but one account's Opus 7d bucket is nearly
+    # capped — sessions there degrade to non-Opus work, so the account
+    # with Opus headroom must win.
+    opus_capped = _cand(plan="max_20x", h5=10.0, w7=20.0, h5_secs=7200, w7_secs=86400)
+    opus_capped = replace(opus_capped, w7_opus_pct=95.0)
+    opus_free = _cand(plan="max_20x", h5=10.0, w7=20.0, h5_secs=7200, w7_secs=86400)
+    opus_free = replace(opus_free, w7_opus_pct=10.0)
+    chosen, _ = pick_best([opus_capped, opus_free], now=FIXED_NOW)
+    assert chosen.account is opus_free.account
+
+
+def test_tier3_missing_opus_data_changes_nothing() -> None:
+    # No Opus data (inference-header-only probe) → dampener is neutral and
+    # the ranking is decided by the unified windows alone.
+    a = _cand(plan="max_20x", w7=10.0, h5=10.0, h5_secs=3600, w7_secs=86400)
+    b = _cand(plan="max_20x", w7=40.0, h5=10.0, h5_secs=3600, w7_secs=86400)
+    assert a.w7_opus_pct is None and b.w7_opus_pct is None
+    chosen, _ = pick_best([b, a], now=FIXED_NOW)
+    assert chosen.account is a.account
 
 
 def test_tier3_no_weekly_data_falls_back_to_hourly_urgency() -> None:

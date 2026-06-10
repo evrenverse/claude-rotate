@@ -106,3 +106,45 @@ def test_save_writes_file_with_expected_shape(tmp_path: Path) -> None:
         "w7_reset_at",
         "http_code",
     }
+
+
+def test_roundtrip_preserves_opus_pct(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    r = ProbeResult(
+        ok=True,
+        http_code=200,
+        h5_pct=5.0,
+        w7_pct=50.0,
+        h5_reset_secs=3600,
+        w7_reset_secs=86400,
+        w7_opus_pct=72.0,
+    )
+    cache.save("main", r)
+
+    monkeypatch.setattr(time, "time", lambda: 1_060.0)
+    loaded = cache.load("main")
+    assert loaded is not None
+    assert loaded.w7_opus_pct == 72.0
+
+
+def test_load_clamps_opus_pct_when_weekly_reset_elapsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    r = ProbeResult(
+        ok=True,
+        http_code=200,
+        h5_pct=50.0,
+        w7_pct=90.0,
+        h5_reset_secs=60,
+        w7_reset_secs=120,
+        w7_opus_pct=95.0,
+    )
+    cache.save("main", r)
+
+    monkeypatch.setattr(time, "time", lambda: 2_000.0)
+    loaded = cache.load("main")
+    assert loaded is not None
+    assert loaded.w7_opus_pct == 0.0

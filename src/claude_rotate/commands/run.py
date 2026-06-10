@@ -105,6 +105,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                         w7_pct=cached.w7_pct,
                         h5_reset_secs=cached.h5_reset_secs,
                         w7_reset_secs=cached.w7_reset_secs,
+                        w7_opus_pct=cached.w7_opus_pct,
                     )
                     dashboard_rows.append(
                         DashboardRow(
@@ -139,6 +140,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                     w7_pct=cached.w7_pct,
                     h5_reset_secs=cached.h5_reset_secs,
                     w7_reset_secs=cached.w7_reset_secs,
+                    w7_opus_pct=cached.w7_opus_pct,
                 )
                 dashboard_rows.append(
                     DashboardRow(
@@ -251,6 +253,7 @@ def _to_probe_result(c: Candidate) -> ProbeResult:
         w7_pct=c.w7_pct,
         h5_reset_secs=c.h5_reset_secs,
         w7_reset_secs=c.w7_reset_secs,
+        w7_opus_pct=c.w7_opus_pct,
     )
 
 

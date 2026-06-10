@@ -7,7 +7,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from claude_rotate.accounts import Account
@@ -17,6 +17,7 @@ from claude_rotate.config import (
     INFERENCE_URL,
     PROBE_MODEL,
     PROBE_TIMEOUT_SECONDS,
+    USAGE_URL,
     USER_AGENT,
 )
 from claude_rotate.selection import Candidate, candidate_from_account
@@ -155,6 +156,58 @@ def parse_usage_response(http_code: int, body: dict[str, Any], *, now: int) -> P
     )
 
 
+def fetch_oauth_usage(token: str, *, now: int | None = None) -> ProbeResult:
+    """GET the OAuth usage endpoint — the only source of per-model 7d buckets.
+
+    The unified 5h/7d numbers here can be capped or rounded, so callers keep
+    using the inference headers for those and merge in only what the headers
+    cannot provide (Opus/Sonnet buckets, extra-usage flag).
+    """
+    now_ts = now if now is not None else int(time.time())
+    req = urllib.request.Request(
+        USAGE_URL,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "anthropic-version": ANTHROPIC_VERSION,
+            "anthropic-beta": ANTHROPIC_BETA,
+            "User-Agent": USER_AGENT,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=PROBE_TIMEOUT_SECONDS) as resp:
+            body = json.loads(resp.read().decode())
+            return parse_usage_response(resp.status, body, now=now_ts)
+    except urllib.error.HTTPError as e:
+        return ProbeResult(ok=False, http_code=e.code, error=f"http_{e.code}")
+    except (TimeoutError, OSError, json.JSONDecodeError, KeyError, ValueError) as e:
+        return ProbeResult(ok=False, http_code=0, error=f"usage_endpoint_error: {e}")
+
+
+def merge_opus_usage(base: ProbeResult, oauth: ProbeResult | None) -> ProbeResult:
+    """Overlay per-model buckets from the OAuth usage endpoint onto a probe.
+
+    Unified percentages and reset times stay from the inference headers
+    (exact); a failed or missing OAuth fetch leaves the base untouched.
+    """
+    if oauth is None or not oauth.ok:
+        return base
+    return replace(
+        base,
+        w7_sonnet_pct=oauth.w7_sonnet_pct,
+        w7_opus_pct=oauth.w7_opus_pct,
+        extra_usage_enabled=oauth.extra_usage_enabled,
+    )
+
+
+def _probe_one(account: Account) -> tuple[Account, ProbeResult]:
+    base = fetch_usage(account.runtime_token)
+    if not base.ok:
+        return account, base
+    return account, merge_opus_usage(base, fetch_oauth_usage(account.runtime_token))
+
+
 def probe_many(accounts: list[Account]) -> list[Candidate]:
     """Probe every account's quota in parallel.
 
@@ -164,7 +217,7 @@ def probe_many(accounts: list[Account]) -> list[Candidate]:
     if not accounts:
         return []
     with ThreadPoolExecutor(max_workers=len(accounts)) as pool:
-        results = list(pool.map(lambda a: (a, fetch_usage(a.runtime_token)), accounts))
+        results = list(pool.map(_probe_one, accounts))
 
     out: list[Candidate] = []
     for account, result in results:
@@ -177,6 +230,7 @@ def probe_many(accounts: list[Account]) -> list[Candidate]:
                     h5_reset_secs=result.h5_reset_secs,
                     w7_reset_secs=result.w7_reset_secs,
                     probe_error="",
+                    w7_opus_pct=result.w7_opus_pct,
                 )
             )
         else:
