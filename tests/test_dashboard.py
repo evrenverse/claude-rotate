@@ -10,6 +10,7 @@ from claude_rotate.accounts import Account
 from claude_rotate.dashboard import (
     DashboardRow,
     compute_forecast,
+    compute_limit_eta,
     gradient_bar,
     render_dashboard,
 )
@@ -356,6 +357,38 @@ def test_compute_forecast_zero_pct_returns_zero() -> None:
 def test_compute_forecast_caps_at_999() -> None:
     # Winziges elapsed → riesige Hochrechnung, gedeckelt
     assert compute_forecast(50.0, 18000 - 60, 18000) == 999
+
+
+def test_compute_limit_eta_seconds_until_100() -> None:
+    # 60% bei halb verstrichenem 5h-Fenster (reset=9000, elapsed=9000):
+    # Prognose 120% → Limit wird erreicht in (100-60)*9000//60 = 6000s, vor Reset.
+    assert compute_limit_eta(60.0, 9000, 18000) == 6000
+
+
+def test_compute_limit_eta_none_when_forecast_under_100() -> None:
+    # 63% bei noch 47m Reset → Prognose 74% < 100 → Fenster resettet vor der Wand.
+    assert compute_limit_eta(63.0, 47 * 60, 18000) is None
+
+
+def test_compute_limit_eta_zero_pct_returns_none() -> None:
+    assert compute_limit_eta(0.0, 9000, 18000) is None
+
+
+def test_compute_limit_eta_at_or_over_limit_returns_none() -> None:
+    assert compute_limit_eta(100.0, 9000, 18000) is None
+
+
+def test_compute_limit_eta_fresh_window_returns_none() -> None:
+    # elapsed <= 0 (reset_secs == window) → keine verstrichene Zeit, keine ETA.
+    assert compute_limit_eta(50.0, 18000, 18000) is None
+
+
+def test_compute_limit_eta_no_active_window_returns_none() -> None:
+    assert compute_limit_eta(50.0, 0, 18000) is None
+
+
+def test_compute_limit_eta_none_pct_returns_none() -> None:
+    assert compute_limit_eta(None, 9000, 18000) is None
 
 
 def test_render_shows_forecast_bracket_by_default() -> None:

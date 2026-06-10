@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 from claude_rotate.accounts import Account
 from claude_rotate.dashboard import DashboardRow
-from claude_rotate.report import build_report, format_reset_column
+from claude_rotate.report import build_report
 
 # 2026-06-05 00:40 UTC is a Friday — a stable reference for clock/weekday math.
 NOW = datetime(2026, 6, 5, 0, 40, tzinfo=UTC)
@@ -67,8 +67,45 @@ def _sample() -> list[DashboardRow]:
     ]
 
 
-def _box_lines(report: str) -> list[str]:
-    return [ln for ln in report.splitlines() if ln and ln[0] in "┌│├└"]
+def _fence_lines(report: str) -> list[str]:
+    """All lines inside the report's Markdown code fences (one fence per account)."""
+    out: list[str] = []
+    inside = False
+    for ln in report.splitlines():
+        if ln == "```":
+            inside = not inside
+            continue
+        if inside:
+            out.append(ln)
+    return out
+
+
+def _header_lines(report: str) -> list[str]:
+    """Account header lines inside the card region (not metric or forecast lines)."""
+    return [
+        ln
+        for ln in _fence_lines(report)
+        if ln.strip()
+        and not ln.lstrip().startswith(("5h", "week"))
+        and not ln.lstrip().startswith(("→", "—", "reached"))
+    ]
+
+
+def _blocks(report: str) -> list[list[str]]:
+    """The per-account blocks (the lines of each individual code fence)."""
+    blocks: list[list[str]] = []
+    cur: list[str] = []
+    inside = False
+    for ln in report.splitlines():
+        if ln == "```":
+            if inside:
+                blocks.append(cur)
+                cur = []
+            inside = not inside
+            continue
+        if inside:
+            cur.append(ln)
+    return blocks
 
 
 def test_marker_both_when_active_equals_chosen() -> None:
@@ -83,48 +120,120 @@ def test_markers_split_when_active_and_chosen_differ() -> None:
     report = build_report(_sample(), chosen="stamp", active="grace", now=NOW)
     assert "@  grace" in report  # active only
     assert " > stamp" in report  # next pick only
-    # the active table row must NOT also carry the chosen marker
-    grace_row = next(ln for ln in _box_lines(report) if "grace" in ln)
-    assert ">" not in grace_row
+    # the active account's header must NOT also carry the chosen marker
+    grace_hdr = next(ln for ln in _header_lines(report) if "grace" in ln)
+    assert ">" not in grace_hdr
 
 
 def test_active_row_sorted_first() -> None:
     report = build_report(_sample(), chosen="stamp", active="stamp", now=NOW)
-    data = [ln for ln in _box_lines(report) if ln.startswith("│") and "Account" not in ln]
-    assert "stamp" in data[0]
+    assert "stamp" in _header_lines(report)[0]
 
 
-def test_all_box_lines_share_one_width() -> None:
+def test_card_values_aligned_within_each_block() -> None:
     report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
-    widths = {len(ln) for ln in _box_lines(report)}
-    assert len(widths) == 1, f"box lines misaligned: {widths}"
+    # Alignment is per section: within each block the current-% column (the
+    # first '%' on each metric line) stacks vertically.
+    for block in _blocks(report):
+        metric_lines = [ln for ln in block if ln.lstrip().startswith(("5h", "week"))]
+        pct_columns = {ln.index("%") for ln in metric_lines}
+        assert len(pct_columns) == 1, f"percent column misaligned in {block}: {pct_columns}"
 
 
-def test_reset_place_values_align_5h() -> None:
+def test_one_code_block_per_account() -> None:
+    rows = _sample()
+    report = build_report(rows, chosen="grace", active="grace", now=NOW)
+    fences = [ln for ln in report.splitlines() if ln == "```"]
+    assert len(fences) == 2 * len(rows)  # one open + one close fence per account
+
+
+def test_progress_bar_full_and_empty() -> None:
+    report = build_report(_sample(), chosen="stamp", active="stamp", now=NOW)
+    lines = _fence_lines(report)
+    assert "█" in report and "░" in report  # bars are rendered at all
+    zero_line = next(ln for ln in lines if "  0%" in ln)
+    assert "█" not in zero_line and "░" in zero_line  # 0% → empty bar
+    full_line = next(ln for ln in lines if "100%" in ln)
+    assert "░" not in full_line and "█" in full_line  # 100% → full bar
+
+
+def test_reset_shows_clock_and_relative() -> None:
     report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
-    # 5h resets all land today → no weekday; hours field always shown.
-    assert "00:59 (0h 19m)" in report
-    assert "04:33 (3h 53m)" in report
+    # absolute clock followed by a compact relative duration in parentheses
+    assert "00:59" in report  # grace 5h reset clock (today)
+    assert "(19m)" in report  # grace 5h reset, relative
+    assert "(3h 53m)" in report  # matri/stamp 5h reset, relative
+    assert "(2d 8h)" in report  # grace weekly reset, relative
 
 
-def test_reset_shows_weekday_and_padded_hours_weekly() -> None:
+def test_reset_shows_weekday_for_dated_reset() -> None:
     report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
-    # weekly resets land on other days → weekday prefix; hours padded to width 2.
-    assert "Sun 08:40 (2d  8h)" in report
-    assert "Mon 02:40 (3d  2h)" in report
-    assert "Thu 12:40 (6d 12h)" in report
+    # weekly resets land on other days → weekday prefix on the clock
+    assert "Sun 08:40" in report  # grace weekly reset
+    assert "Mon 02:40" in report  # matri weekly reset
+    assert "Thu 12:40" in report  # stamp weekly reset
 
 
-def test_format_reset_column_pads_to_common_width() -> None:
-    cells = format_reset_column([8 * _HOUR, 12 * _HOUR + 0], now=NOW)
-    # both sub-day → "Xh Ym"; 8 vs 12 → hours padded so units line up
-    assert cells[0].endswith("( 8h 0m)")
-    assert cells[1].endswith("(12h 0m)")
-    assert len({len(c) for c in cells}) == 1
+def _grace_block(report: str) -> list[str]:
+    return next(b for b in _blocks(report) if "grace" in b[0])
 
 
-def test_format_reset_column_none_renders_dash() -> None:
-    assert format_reset_column([None, None], now=NOW) == ["-", "-"]
+def _subline_after(block: list[str], label: str) -> str:
+    """The forecast sub-line that follows a given window's fact line."""
+    fact = next(ln for ln in block if ln.lstrip().startswith(label))
+    return block[block.index(fact) + 1]
+
+
+def test_forecast_on_its_own_arrow_prefixed_subline() -> None:
+    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
+    # grace weekly 94% projects to 141% by reset → now on its own ``→``-prefixed
+    # sub-line beneath the week fact line, no longer a fact-line column.
+    sub = _subline_after(_grace_block(report), "week")
+    assert "→141%" in sub
+    assert not sub.lstrip().startswith(("5h", "week"))  # the sub-line is label-less
+
+
+def test_limit_eta_shown_when_forecast_reaches_limit() -> None:
+    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
+    # grace weekly 94% with 403200s elapsed crosses 100% in 25736s ≈ 7h 8m, i.e.
+    # at 07:48 counting from 00:40 → absolute clock + relative on the sub-line.
+    sub = _subline_after(_grace_block(report), "week")
+    assert "07:48" in sub  # absolute limit-hit clock
+    assert "(7h 8m)" in sub  # relative limit-hit duration
+
+
+def test_no_eta_when_forecast_stays_under_limit() -> None:
+    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
+    # grace 5h 44% only projects to 46% (< 100) → forecast shown, ETA collapses
+    # to a trailing em-dash (the window resets before the wall).
+    sub = _subline_after(_grace_block(report), "5h")
+    assert "→46%" in sub
+    assert sub.rstrip().endswith("—")
+
+
+def test_reached_subline_when_already_at_limit() -> None:
+    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
+    # matri weekly is at 100% → its sub-line is the lone word 'reached'.
+    assert any(ln.strip() == "reached" for ln in _fence_lines(report))
+
+
+def test_no_trend_subline_is_lone_dash() -> None:
+    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
+    # stamp 5h/week are 0% → no trend → the sub-line is a lone em-dash.
+    assert any(ln.strip() == "—" for ln in _fence_lines(report))
+
+
+def test_forecast_subline_columns_align_under_facts() -> None:
+    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
+    # The forecast %-column stacks under the current %-column, and the whole
+    # sub-line shares the fact line's grid (so the relative duration ends in the
+    # same column too).
+    block = _grace_block(report)
+    week_fact = next(ln for ln in block if ln.lstrip().startswith("week"))
+    week_sub = block[block.index(week_fact) + 1]
+    assert "→141%" in week_sub
+    assert week_fact.index("%") == week_sub.index("%")
+    assert week_fact.rindex(")") == week_sub.rindex(")")
 
 
 def test_warnings_flag_weekly_risk_and_forecast() -> None:
