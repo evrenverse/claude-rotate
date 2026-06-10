@@ -15,6 +15,7 @@ from claude_rotate.config import (
     BALANCE_THRESHOLD_PERCENT,
     EXPIRY_SOON_DAYS,
     EXPIRY_URGENT_DAYS,
+    FORECAST_WINDOW_5H_SECONDS,
     HEADROOM_PERCENT,
     SOON_QUOTA_CEILING_PERCENT,
 )
@@ -167,10 +168,38 @@ def _h5_availability(c: Candidate) -> float:
     The 5h window renews every 5h regardless of which account is picked, so a
     fresh 5h window is no reason to *prefer* an account — but a nearly capped
     one means the pick would stall within minutes, so it dampens the score.
+    The stricter of two dampeners wins:
+
+    - Level: 5h headroom left right now.
+    - Pace: how much of the time until the 5h reset the account survives at
+      its observed burn rate. 47% burned in the first 20 minutes of a window
+      walls long before a reset that is hours away — picking that account
+      buys minutes, then a multi-hour stall. The same 47% with the reset
+      minutes away is harmless (the budget is about to come back).
     """
     if c.h5_pct is None:
         return 1.0
-    return max(0.0, HEADROOM_PERCENT - c.h5_pct) / 100.0
+    level = max(0.0, HEADROOM_PERCENT - c.h5_pct) / 100.0
+    return min(level, _h5_pace_share(c))
+
+
+def _h5_pace_share(c: Candidate) -> float:
+    """Share of the time until the 5h reset survived at the observed burn rate.
+
+    Time-to-wall is headroom divided by the burn rate (usage per hour since
+    the window opened); dividing by the time until reset gives the share of
+    the remaining window the account can actually serve. 1.0 when no burn has
+    been observed or the pace never hits the wall before the reset.
+    """
+    if c.h5_pct is None or c.h5_pct <= 0.0 or c.h5_reset_secs <= 0:
+        return 1.0
+    remaining = min(1.0, c.h5_reset_secs / FORECAST_WINDOW_5H_SECONDS)
+    elapsed = 1.0 - remaining
+    if elapsed <= 0.0:
+        return 1.0
+    used = c.h5_pct / 100.0
+    headroom = max(0.0, HEADROOM_PERCENT - c.h5_pct) / 100.0
+    return min(1.0, (headroom * elapsed) / (used * remaining))
 
 
 def _drain_urgency_score(c: Candidate) -> float:
