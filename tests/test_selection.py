@@ -199,11 +199,39 @@ def test_tier3_prefers_higher_headroom_per_reset_hour() -> None:
     assert chosen.account is a.account
 
 
-def test_tier3_weights_weekly_three_times_hourly() -> None:
-    # A: burns weekly slowly but hourly fast
-    # B: burns hourly slowly but weekly fast
-    a = _cand(plan="max_20x", h5=80.0, w7=10.0, h5_secs=3600, w7_secs=86400)
-    b = _cand(plan="max_20x", h5=10.0, w7=80.0, h5_secs=3600, w7_secs=86400)
+def test_tier3_weekly_urgency_beats_fresher_5h_window() -> None:
+    # B's weekly window resets in 24h with 85% headroom left — quota that is
+    # about to be forfeited. A merely has a fresher 5h window, which renews
+    # every 5h anyway. B must win.
+    a = _cand(plan="max_20x", h5=10.0, w7=10.0, h5_secs=7800, w7_secs=120 * 3600)
+    b = _cand(plan="max_20x", h5=50.0, w7=15.0, h5_secs=7800, w7_secs=24 * 3600)
+    chosen, _ = pick_best([a, b], now=FIXED_NOW)
+    assert chosen.account is b.account
+
+
+def test_tier3_real_world_regression_soon_resetting_weekly_wins() -> None:
+    # 2026-06-10 live snapshot: stamp's weekly resets in 26h at 19% used,
+    # grace's in 94h at 15%. The old weighted-sum score let grace's fresher
+    # 5h window (16% vs 39%) overrule stamp's far higher weekly urgency.
+    grace = _cand(h5=16.0, w7=15.0, h5_secs=7800, w7_secs=94 * 3600)
+    matri = _cand(h5=47.0, w7=22.0, h5_secs=7800, w7_secs=112 * 3600, expires_days=8)
+    stamp = _cand(h5=39.0, w7=19.0, h5_secs=7800, w7_secs=26 * 3600)
+    chosen, _ = pick_best([grace, matri, stamp], now=FIXED_NOW)
+    assert chosen.account is stamp.account
+
+
+def test_tier3_near_capped_5h_dampens_equal_weekly_urgency() -> None:
+    # Equal weekly urgency → the account that can actually work right now
+    # (more 5h headroom) wins.
+    blocked = _cand(plan="max_20x", h5=90.0, w7=20.0, h5_secs=7200, w7_secs=86400)
+    free = _cand(plan="max_20x", h5=10.0, w7=20.0, h5_secs=7200, w7_secs=86400)
+    chosen, _ = pick_best([blocked, free], now=FIXED_NOW)
+    assert chosen.account is free.account
+
+
+def test_tier3_no_weekly_data_falls_back_to_hourly_urgency() -> None:
+    a = _cand(plan="max_20x", h5=60.0, w7=None, h5_secs=7200, w7_secs=0)
+    b = _cand(plan="max_20x", h5=20.0, w7=None, h5_secs=7200, w7_secs=0)
     chosen, _ = pick_best([a, b], now=FIXED_NOW)
     assert chosen.account is b.account
 

@@ -16,9 +16,7 @@ from claude_rotate.config import (
     EXPIRY_SOON_DAYS,
     EXPIRY_URGENT_DAYS,
     HEADROOM_PERCENT,
-    HOURLY_WEIGHT,
     SOON_QUOTA_CEILING_PERCENT,
-    WEEKLY_WEIGHT,
 )
 
 _PLAN_RANKS: dict[str, int] = {
@@ -143,23 +141,50 @@ def pick_best(
     return best, _format_wait(best, wait_seconds)
 
 
+def _weekly_urgency(c: Candidate) -> float:
+    """Weekly headroom-% per hour until the weekly window resets.
+
+    Weekly quota is the scarce good: whatever is unused at reset is forfeited,
+    so the account whose remaining weekly quota must be drained fastest scores
+    highest. Zero when no weekly data is available.
+    """
+    if c.w7_pct is None or c.w7_reset_secs <= 0:
+        return 0.0
+    headroom = max(0.0, HEADROOM_PERCENT - c.w7_pct)
+    return headroom / (c.w7_reset_secs / 3600)
+
+
+def _hourly_urgency(c: Candidate) -> float:
+    if c.h5_pct is None or c.h5_reset_secs <= 0:
+        return 0.0
+    headroom = max(0.0, HEADROOM_PERCENT - c.h5_pct)
+    return headroom / (c.h5_reset_secs / 3600)
+
+
+def _h5_availability(c: Candidate) -> float:
+    """Fraction of the 5h window still usable right now (1.0 when unknown).
+
+    The 5h window renews every 5h regardless of which account is picked, so a
+    fresh 5h window is no reason to *prefer* an account — but a nearly capped
+    one means the pick would stall within minutes, so it dampens the score.
+    """
+    if c.h5_pct is None:
+        return 1.0
+    return max(0.0, HEADROOM_PERCENT - c.h5_pct) / 100.0
+
+
 def _drain_urgency_score(c: Candidate) -> float:
-    h5 = c.h5_pct or 0.0
-    w7 = c.w7_pct or 0.0
-    score = 0.0
-    if c.h5_pct is not None and c.h5_reset_secs > 0:
-        headroom = max(0.0, HEADROOM_PERCENT - h5)
-        score += (headroom / (c.h5_reset_secs / 3600)) * HOURLY_WEIGHT
-    if c.w7_pct is not None and c.w7_reset_secs > 0:
-        headroom = max(0.0, HEADROOM_PERCENT - w7)
-        score += (headroom / (c.w7_reset_secs / 3600)) * WEEKLY_WEIGHT
-    return score
+    return _weekly_urgency(c) * _h5_availability(c)
 
 
 def _pick_tier3(usable: list[Candidate]) -> Candidate:
     ranked = sorted(
         usable,
-        key=lambda c: (-_drain_urgency_score(c), -plan_rank(c.account.plan)),
+        key=lambda c: (
+            -_drain_urgency_score(c),
+            -_hourly_urgency(c),
+            -plan_rank(c.account.plan),
+        ),
     )
     return ranked[0]
 
