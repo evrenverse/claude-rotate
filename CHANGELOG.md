@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Responsive `status` dashboard.** The quota dashboard now adapts to the
+  terminal width: gradient bars grow from 8 to 20 cells with available space,
+  relative durations are dropped first when space gets tight, and below ~76
+  columns the table folds into one compact card per account. Each account
+  spans two lines per window — a fact line (bar, usage %, absolute local
+  reset clock with weekday slot + relative duration) and a dimmed forecast
+  sub-line (projected % at reset and, when the limit is crossed before reset,
+  the clock at which usage hits 100%, red when under an hour away). The
+  dashboard also gained the `--report` view's context: a session status line,
+  an `@` marker for the account this session runs on (alongside `>` next pick
+  and `★` pinned), a plan badge per account, the subscription column with the
+  absolute end date beneath the days left, and a risk footer with warnings
+  plus the freest fallback account. Quota semantics (forecast, limit ETA,
+  risk thresholds, wording) moved to a shared `insights` module used by both
+  the dashboard and `--report`. `status --json` now also reports the active
+  session account as a top-level `active` field.
+
 ### Removed
 
 - **Global credentials mirror in isolation mode.** The sync cron no longer

@@ -86,12 +86,12 @@ def _row(
     )
 
 
-def test_render_contains_label_and_percentages() -> None:
+def test_render_contains_name_and_percentages() -> None:
     rows = [_row(_acc("main"))]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
     render_dashboard(rows, chosen=rows[0].account.name, console=console)
     out = console.file.getvalue()
-    assert "Main" in out
+    assert "main" in out
     assert "10" in out  # h5 pct
     assert "20" in out  # w7 pct
 
@@ -223,14 +223,14 @@ def test_status_json_no_token_expires_at_field() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_render_header_contains_5h_and_weekly() -> None:
-    """The header row must mention '5h' and 'weekly'."""
+def test_render_header_contains_5h_and_week() -> None:
+    """The header row must mention '5h' and 'week'."""
     rows = [_row(_acc("main"))]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
     render_dashboard(rows, chosen=None, console=console)
     out = console.file.getvalue()
     assert "5h" in out
-    assert "weekly" in out
+    assert "week" in out
 
 
 def test_pct_color_returns_gradient_colour_string() -> None:
@@ -493,11 +493,13 @@ def test_compute_forecast_shown_just_below_100pct() -> None:
 
 
 def test_render_omits_forecast_when_already_maxed() -> None:
-    # Beide Fenster >= 100% → keine Prognose-Klammer
+    # Beide Fenster >= 100% → kein Prognose-Token (Warnings dürfen "→" enthalten)
+    import re
+
     rows = [_row(_acc("main"), h5_pct=100.0, h5_secs=3600, w7_pct=101.0, w7_secs=86400)]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
     render_dashboard(rows, chosen="main", console=console)
-    assert "→" not in console.file.getvalue()
+    assert not re.search(r"→\d+%", console.file.getvalue())
 
 
 def test_status_json_forecast_null_when_maxed() -> None:
@@ -507,3 +509,115 @@ def test_status_json_forecast_null_when_maxed() -> None:
     acct = status_json(rows, chosen="main")["accounts"][0]
     assert acct["h5_forecast_pct"] is None
     assert acct["w7_forecast_pct"] is None
+
+
+# ---------------------------------------------------------------------------
+# Responsive dashboard: status line, limit ETA, cards mode, risk footer
+# ---------------------------------------------------------------------------
+
+
+def test_render_status_line_mentions_active_and_rotation() -> None:
+    rows = [_row(_acc("a")), _row(_acc("b"))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen="b", active="a", console=console)
+    out = console.file.getvalue()
+    assert "Session runs on 'a' (@)" in out
+    assert "rotates to 'b'" in out
+
+
+def test_render_active_account_gets_at_marker() -> None:
+    rows = [_row(_acc("a")), _row(_acc("b"))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen="b", active="a", console=console)
+    lines = console.file.getvalue().splitlines()
+    assert any(ln.lstrip().startswith("@") and " a" in ln for ln in lines)
+
+
+def test_render_shows_absolute_reset_clock() -> None:
+    # 50% bei noch 1h im 5h-Fenster → Reset-Uhrzeit (HH:MM) muss erscheinen
+    fixed_now = datetime(2026, 4, 22, 10, 0, tzinfo=UTC)
+    expected = (fixed_now + timedelta(hours=1)).astimezone().strftime("%H:%M")
+    rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console, now=fixed_now)
+    assert expected in console.file.getvalue()
+
+
+def test_render_shows_limit_eta_when_wall_before_reset() -> None:
+    # 60% bei halb verstrichenem 5h-Fenster → ETA nach 6000s, vor dem Reset.
+    fixed_now = datetime(2026, 4, 22, 10, 0, tzinfo=UTC)
+    eta_clock = (fixed_now + timedelta(seconds=6000)).astimezone().strftime("%H:%M")
+    rows = [_row(_acc("main"), h5_pct=60.0, h5_secs=9000)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console, now=fixed_now)
+    out = console.file.getvalue()
+    assert "→120%" in out
+    assert eta_clock in out
+
+
+def test_render_plan_badge_shown() -> None:
+    rows = [_row(_acc("main"))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen="main", console=console)
+    assert "Max-20" in console.file.getvalue()
+
+
+def test_render_sub_column_shows_absolute_date() -> None:
+    fixed_now = datetime(2026, 4, 22, tzinfo=UTC)
+    rows = [_row(_acc("main", sub_days=30))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen="main", console=console, now=fixed_now)
+    expected = (fixed_now + timedelta(days=30)).astimezone().strftime("%d %b")
+    assert expected in console.file.getvalue()
+
+
+def test_render_narrow_terminal_folds_into_cards() -> None:
+    rows = [_row(_acc("main"))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=60)
+    render_dashboard(rows, chosen="main", console=console)
+    out = console.file.getvalue()
+    # Cards carry their own per-window labels and the plan in the header line
+    assert "main · Max-20" in out
+    assert "5h" in out
+    assert "week" in out
+
+
+def test_render_cards_mode_shows_error_status() -> None:
+    rows = [_row(_acc("main"), h5_pct=None, w7_pct=None, status="relogin", note="token invalid")]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=60)
+    render_dashboard(rows, chosen=None, console=console)
+    out = console.file.getvalue()
+    assert "RELOGIN" in out
+    assert "token invalid" in out
+
+
+def test_render_risk_footer_lists_weekly_risk_and_fallback() -> None:
+    # a: Woche 95% → Warnung; b: Woche 20% → Fallback-Empfehlung
+    rows = [
+        _row(_acc("a"), w7_pct=95.0, w7_secs=86400),
+        _row(_acc("b"), w7_pct=20.0, w7_secs=86400),
+    ]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="a", active="a", console=console)
+    out = console.file.getvalue()
+    assert "weekly limit at risk" in out
+    assert "Fallback: b" in out
+
+
+def test_render_no_risk_footer_when_healthy() -> None:
+    rows = [_row(_acc("main"), h5_pct=10.0, w7_pct=20.0)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="main", console=console)
+    out = console.file.getvalue()
+    assert "⚠" not in out
+    assert "Fallback" not in out
+
+
+def test_status_json_includes_active() -> None:
+    from claude_rotate.dashboard import status_json
+
+    rows = [_row(_acc("main"))]
+    payload = status_json(rows, chosen="main", active="main")
+    assert payload["active"] == "main"
+    payload = status_json(rows, chosen="main")
+    assert payload["active"] is None
