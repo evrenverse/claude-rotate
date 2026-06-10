@@ -7,7 +7,9 @@ skill (see ``skill_assets/account``) and to stay readable on a phone screen
 (separate code fences render as separate cards in the chat UI). It answers a
 narrower question — *which account is this session on, what are the limits, and
 what should I watch out for* — and is therefore a separate, self-contained
-renderer rather than another column on the dashboard.
+renderer rather than another column on the dashboard. Quota semantics
+(forecasts, risk thresholds, wording) are shared with the dashboard via
+``claude_rotate.insights``.
 
 Two markers identify accounts:
 
@@ -36,14 +38,18 @@ from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
 )
-from claude_rotate.dashboard import DashboardRow, compute_forecast, compute_limit_eta
-
-WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
-
-_WEEKLY_RISK_PCT = 90.0
-_FORECAST_RISK_PCT = 100
-_EXPIRY_WARN_DAYS = 7
-_FALLBACK_MAX_WEEK_PCT = 80.0
+from claude_rotate.dashboard import DashboardRow
+from claude_rotate.insights import (
+    clock_at,
+    compute_forecast,
+    compute_limit_eta,
+    days_left,
+    fallback_note,
+    pct_str,
+    rel_duration,
+    status_line,
+    warning_messages,
+)
 
 
 class _Cell(NamedTuple):
@@ -100,20 +106,12 @@ def _render_cards(
     # + blank bar, with the fact line's two-space gaps.
     sub_prefix = f"{'':<{label_width}}  {' ' * _BAR_WIDTH}  "
 
-    def reset_clock(reset_secs: int, *, show_weekday: bool) -> str:
-        reset = now + timedelta(seconds=max(reset_secs, 0))
-        clock = reset.strftime("%H:%M")
-        if show_weekday:
-            weekday = WEEKDAYS[reset.weekday()] if reset.date() != now.date() else "   "
-            clock = f"{weekday} {clock}"
-        return clock
-
     blocks: list[str] = []
     for row in ordered:
         name = row.account.name
         marker = ("@" if name == active else " ") + (">" if name == chosen else " ")
         head = f"{marker} {name}"
-        days = _days_left(row.account.effective_expires_at, now_utc)
+        days = days_left(row.account.effective_expires_at, now_utc)
         if days != "-":
             head += f" · {days} left"
 
@@ -133,7 +131,8 @@ def _render_cards(
         for label, pct, secs, window in specs:
             forecast = compute_forecast(pct, secs, window)
             if pct is not None:
-                reset_clk, reset_rel = reset_clock(secs, show_weekday=show_weekday), _rel(secs)
+                reset_clk = clock_at(now, secs, show_weekday=show_weekday)
+                reset_rel = rel_duration(secs)
             else:
                 reset_clk, reset_rel = "—", ""
             if pct is not None and pct >= 100:
@@ -144,12 +143,21 @@ def _render_cards(
                 special, fc_str = None, f"→{forecast}%"
                 eta = compute_limit_eta(pct, secs, window)
                 if eta is not None:
-                    eta_clk, eta_rel = reset_clock(eta, show_weekday=show_weekday), _rel(eta)
+                    eta_clk = clock_at(now, eta, show_weekday=show_weekday)
+                    eta_rel = rel_duration(eta)
                 else:
                     eta_clk, eta_rel = "—", ""
             cells.append(
                 _Cell(
-                    label, pct, _pct(pct), reset_clk, reset_rel, special, fc_str, eta_clk, eta_rel
+                    label,
+                    pct,
+                    pct_str(pct),
+                    reset_clk,
+                    reset_rel,
+                    special,
+                    fc_str,
+                    eta_clk,
+                    eta_rel,
                 )
             )
 
@@ -172,10 +180,6 @@ def _render_cards(
     return blocks
 
 
-def _pct(value: float | None) -> str:
-    return f"{value:g}%" if value is not None else "N/A"
-
-
 _BAR_FILLED = "█"  # same glyphs as dashboard.gradient_bar (plain, no colour here)
 _BAR_EMPTY = "░"
 _BAR_WIDTH = 5  # half-width keeps each account line within a phone's screen width
@@ -189,94 +193,19 @@ def _bar(pct: float | None, width: int = _BAR_WIDTH) -> str:
     return _BAR_FILLED * filled + _BAR_EMPTY * (width - filled)
 
 
-def _rel(reset_secs: int) -> str:
-    """Compact relative time-to-reset in parentheses: (40m), (1h 3m), (4d 20h)."""
-    secs = max(reset_secs, 0)
-    days, rem = divmod(secs, 86400)
-    hours, rem = divmod(rem, 3600)
-    minutes = rem // 60
-    if days:
-        return f"({days}d {hours}h)"
-    if hours:
-        return f"({hours}h {minutes}m)"
-    return f"({minutes}m)"
-
-
-def _days_left(expires_at: datetime | None, now_utc: datetime) -> str:
-    if expires_at is None:
-        return "-"
-    return f"{(expires_at - now_utc).days}d"
-
-
-def _status_line(active: str | None, chosen: str | None) -> str:
-    if active is None:
-        if chosen is None:
-            return "No active session and no rotation pick available."
-        return f"No active session recorded; next launch would pick '{chosen}' (>)."
-    if active == chosen:
-        return f"Session runs on '{active}' (@); it is also the next pick (>), so no rotation."
-    if chosen is None:
-        return f"Session runs on '{active}' (@)."
-    return f"Session runs on '{active}' (@); next launch rotates to '{chosen}' (>)."
-
-
 def _warnings(rows: Sequence[DashboardRow], *, active: str | None, now_utc: datetime) -> list[str]:
-    warns: list[str] = []
-    for row in rows:
-        name = row.account.name
-        tag = " (active)" if name == active else ""
-        if row.status != "ok":
-            detail = f" — {row.note}" if row.note else ""
-            warns.append(f"- {name}{tag}: {row.status}{detail}.")
-            continue
-        w7 = row.w7_pct
-        w7_forecast = compute_forecast(w7, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
-        over_forecast = w7_forecast is not None and w7_forecast > _FORECAST_RISK_PCT
-        if w7 is not None and (w7 >= _WEEKLY_RISK_PCT or over_forecast):
-            parts = [f"week {w7:g}%"]
-            if w7_forecast is not None and over_forecast:
-                parts.append(f"forecast {w7_forecast}%")
-            warns.append(f"- {name}{tag}: {', '.join(parts)} → weekly limit at risk.")
-        h5_forecast = compute_forecast(row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS)
-        if h5_forecast is not None and h5_forecast > _FORECAST_RISK_PCT:
-            warns.append(f"- {name}{tag}: 5h forecast {h5_forecast}% → 5h limit at risk.")
-        expires_at = row.account.effective_expires_at
-        if expires_at is not None:
-            days = (expires_at - now_utc).days
-            if days < _EXPIRY_WARN_DAYS:
-                warns.append(f"- {name}{tag}: subscription expires in {days}d.")
+    msgs = warning_messages(rows, active=active, now_utc=now_utc)
 
     # Nothing wrong → no fallback advice; keep the all-clear line meaningful.
-    if not warns:
+    if not msgs:
         return ["✅ All accounts healthy."]
 
-    fallback = _fallback_account(rows, active=active)
-    if fallback is not None:
-        forecast = compute_forecast(
-            fallback.w7_pct, fallback.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS
-        )
-        extra = f", forecast {forecast}%" if forecast is not None else ""
-        week = _pct(fallback.w7_pct)
-        warns.append(f"- Fallback: {fallback.account.name} (week {week}{extra}).")
+    warns = [f"- {msg}" for msg in msgs]
+    note = fallback_note(rows, active=active)
+    if note is not None:
+        warns.append(f"- {note}")
 
     return ["⚠️ Warnings:", *warns]
-
-
-def _fallback_account(rows: Sequence[DashboardRow], *, active: str | None) -> DashboardRow | None:
-    """The non-active account with the most weekly headroom, if any is roomy."""
-    others = [r for r in rows if r.account.name != active and r.w7_pct is not None]
-    if not others:
-        return None
-
-    def headroom(row: DashboardRow) -> tuple[float, float]:
-        used = row.w7_pct if row.w7_pct is not None else 1e9
-        forecast = compute_forecast(row.w7_pct, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
-        return (used, float(forecast) if forecast is not None else 1e9)
-
-    spare = min(others, key=headroom)
-    if spare.w7_pct is not None and spare.w7_pct < _FALLBACK_MAX_WEEK_PCT:
-        return spare
-    return None
 
 
 def build_report(
@@ -311,7 +240,7 @@ def build_report(
     lines: list[str] = [
         "Legend: @ = running in this session, > = next pick (rotation), @> = both."
         " Sub = days until subscription end.",
-        _status_line(active, chosen),
+        status_line(active, chosen),
         "",
     ]
     for card in cards:

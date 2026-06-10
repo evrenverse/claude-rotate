@@ -1,14 +1,20 @@
-"""Dashboard rendering with rich.
+"""Status dashboard rendering with rich.
 
-This task introduces the gradient-bar primitive. Tasks 24+25 layer the table,
-footers, and non-TTY mode on top.
+``render_dashboard`` is responsive: gradient bars grow with the terminal,
+relative durations are dropped first when space gets tight, and below
+``_CARDS_MAX_WIDTH`` the table folds into one card per account. Each window
+(5h / week) renders a *fact line* (bar, usage %, reset clock + relative
+duration) and a dimmed *forecast sub-line* (projected % at reset and, when
+the limit is crossed before reset, the clock at which usage hits 100%).
+Shared quota semantics (forecasts, warnings, wording) live in
+``claude_rotate.insights`` and are reused by the ``--report`` renderer.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from rich.console import Console
@@ -21,6 +27,29 @@ from claude_rotate.config import (
     FORECAST_WINDOW_7D_SECONDS,
     STALE_METADATA_WARN_DAYS,
 )
+from claude_rotate.insights import (
+    clock_at,
+    compute_forecast,
+    compute_limit_eta,
+    fallback_note,
+    plan_label,
+    rel_duration,
+    status_line,
+    warning_messages,
+)
+
+__all__ = [
+    "DashboardRow",
+    "compact_one_liner",
+    "compute_forecast",
+    "compute_limit_eta",
+    "fmt_sub_expiry",
+    "forecast_enabled",
+    "gradient_bar",
+    "render_dashboard",
+    "render_stale_footer",
+    "status_json",
+]
 
 _FILLED = "█"
 _EMPTY = "░"
@@ -62,11 +91,6 @@ def gradient_bar(pct: float, width: int = 12) -> Text:
     return bar
 
 
-# ---------------------------------------------------------------------------
-# Task 24: DashboardRow dataclass, formatters, and render_dashboard
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class DashboardRow:
     account: Account
@@ -77,52 +101,6 @@ class DashboardRow:
     from_cache: bool = False
     status: str = "ok"  # "ok" | "relogin" | "rate_limited" | "sub_canceled" | "no_data"
     note: str = ""
-
-
-# Fixed column widths so reset strings line up vertically between rows.
-# ``_fmt_5h`` is always 6 chars (``5h 59m``); ``_fmt_weekly`` is always
-# 10 chars (``7d 23h 59m``) — we always include the day counter, even at
-# 0d, so both cells below the "weekly" header start at the same column.
-_RESET_WIDTH_5H = 6
-_RESET_WIDTH_WEEKLY = 10
-
-# Fixed slot for the forecast bracket so the reset column stays aligned across
-# rows. Widest token is " [→999%]" (leading space + 7 chars) = 8.
-_FORECAST_WIDTH = 8
-
-
-def _fmt_duration(secs: int, *, include_days: bool) -> str:
-    """Format ``secs`` as a duration, dropping any zero-valued component.
-
-    ``2d 0h 45m`` → ``2d 45m``, ``5h 0m`` → ``5h``, ``0h 23m`` → ``23m``.
-    Paired with right-aligned padding in ``_bar_pct_reset`` so unit
-    markers (``d``/``h``/``m``) still line up vertically across rows
-    despite the variable-length output.
-    """
-    if secs <= 0:
-        return ""
-    if include_days:
-        d, rem = divmod(secs, 86400)
-    else:
-        d, rem = 0, secs
-    h, rem = divmod(rem, 3600)
-    m = rem // 60
-    parts = []
-    if d > 0:
-        parts.append(f"{d}d")
-    if h > 0:
-        parts.append(f"{h}h")
-    if m > 0:
-        parts.append(f"{m}m")
-    return " ".join(parts) if parts else "<1m"
-
-
-def _fmt_5h(secs: int) -> str:
-    return _fmt_duration(secs, include_days=False)
-
-
-def _fmt_weekly(secs: int) -> str:
-    return _fmt_duration(secs, include_days=True)
 
 
 _EXPIRY_GRADIENT_DAYS = 30
@@ -150,7 +128,7 @@ def fmt_sub_expiry(
     status: str | None = None,
     now: datetime | None = None,
 ) -> tuple[str, str]:
-    """Return (text, rich-style) for the ``expires`` column.
+    """Return (text, rich-style) for the subscription column.
 
     Days render as ``Nd``; when already past, ``Nh`` until cutoff. Colour
     is a per-day gradient from the same palette as the bars (blue → amber
@@ -183,55 +161,8 @@ def _pct_color(pct: float | None, width: int = 12) -> str:
     return _color_at(filled - 1, width)
 
 
-def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> int | None:
-    """Linear projection of where ``pct`` lands at window reset.
-
-    Stateless — relies only on the current percentage and seconds-until-reset.
-    Truncates exactly like the Bash statusline (``int(pct)`` + floor division)
-    so the dashboard and statusline show the same figure for the same inputs.
-    Returns ``None`` when there is no usable elapsed time (no active window or
-    a brand-new window) or when usage is already at/over the limit (``pct >=
-    100`` — the projection would only be noise), 0 for zero usage, and caps the
-    result at 999.
-    """
-    if pct is None or reset_secs <= 0:
-        return None
-    elapsed = window_secs - reset_secs
-    if elapsed <= 0:
-        return None
-    if pct <= 0:
-        return 0
-    if pct >= 100:
-        return None
-    return min(999, int(pct) * window_secs // elapsed)
-
-
-def compute_limit_eta(pct: float | None, reset_secs: int, window_secs: int) -> int | None:
-    """Seconds-from-now until usage is projected to reach 100%.
-
-    Linear projection at the current rate, mirroring ``compute_forecast``'s
-    ``int(pct)`` truncation so the forecast % and this ETA stay consistent.
-    Returns ``None`` when there is no usable elapsed time (no active / brand-new
-    window), when usage is zero or already at/over the limit, or when the window
-    resets before 100% is reached (equivalently: ``compute_forecast`` would be
-    ``<= 100``, so there is no limit hit to forecast inside this window).
-    """
-    if pct is None or reset_secs <= 0:
-        return None
-    elapsed = window_secs - reset_secs
-    if elapsed <= 0:
-        return None
-    p = int(pct)
-    if p <= 0 or p >= 100:
-        return None
-    eta = (100 - p) * elapsed // p
-    if eta >= reset_secs:
-        return None  # window resets before the wall is reached
-    return eta
-
-
 def forecast_enabled() -> bool:
-    """Whether the status dashboard renders the [→XX%] forecast.
+    """Whether the status dashboard renders the →XX% forecast sub-lines.
 
     On by default; ``CLAUDE_ROTATE_FORECAST=0`` disables it. Mirrors the toggle
     in the separate (external) Bash statusline project so the two UIs agree.
@@ -239,64 +170,305 @@ def forecast_enabled() -> bool:
     return os.environ.get("CLAUDE_ROTATE_FORECAST", "1") != "0"
 
 
-def _bar_pct_reset(
-    pct: float | None,
-    reset_secs: int,
-    fmt_reset: Any,
-    from_cache: bool,
+# ---------------------------------------------------------------------------
+# Responsive dashboard
+# ---------------------------------------------------------------------------
+
+_BAR_MIN = 8
+_BAR_MAX = 20
+_CARDS_MAX_WIDTH = 76  # below this terminal width, fold the table into cards
+_CARD_BAR_WIDTH = 10
+_ETA_URGENT_SECS = 3600  # limit-ETA under an hour renders red, not dim
+
+_STATUS_LABELS = {
+    "relogin": ("RELOGIN", "red"),
+    "rate_limited": ("LIMITED", "yellow"),
+    "sub_canceled": ("CANCELED", "red"),
+}
+
+
+@dataclass(frozen=True)
+class _WindowCell:
+    """One window's pre-rendered strings for one account row."""
+
+    pct: float | None
+    pct_str: str
+    clock: str
+    rel: str
+    forecast: int | None
+    fc_str: str
+    eta_secs: int | None
+    eta_clock: str
+    eta_rel: str
+
+
+_NA_CELL = _WindowCell(None, "N/A", "", "", None, "", None, "", "")
+
+
+def _window_cells(
+    rows: list[DashboardRow],
+    window: str,
+    window_secs: int,
     *,
-    width: int = 12,
-    reset_width: int = 0,
-    forecast: int | None = None,
-    forecast_slot: int = 0,
-) -> Text:
-    """Combine gradient bar + coloured pct + fixed-width reset into one Text cell.
+    now_local: datetime,
+    show_forecast: bool,
+) -> list[_WindowCell]:
+    """Build one column of cells; the weekday slot is shared per column."""
+    datas: list[tuple[float | None, int, bool]] = []
+    for r in rows:
+        pct = r.h5_pct if window == "5h" else r.w7_pct
+        secs = r.h5_reset_secs if window == "5h" else r.w7_reset_secs
+        datas.append((pct if r.status == "ok" else None, secs, r.from_cache))
 
-    ``reset_width`` pads (or reserves) the reset-time slot so the value
-    sits at the same column regardless of whether this row had usage in
-    the window or not. Rows with empty reset (usage <1 min or 0%) still
-    get the trailing whitespace so the next column stays aligned.
-    """
-    cell = Text()
-    if pct is None:
-        cell.append("N/A", style="grey50")
-        if reset_width:
-            # pad the rest so the following column aligns (incl. forecast slot)
-            cell.append(" " * (width + 5 + forecast_slot + 2 + reset_width - len("N/A")))
-        return cell
+    def lands_on_other_day(secs: int) -> bool:
+        return (now_local + timedelta(seconds=max(secs, 0))).date() != now_local.date()
 
-    # Gradient bar
-    bar = gradient_bar(pct, width=width)
-    cell.append_text(bar)
+    show_weekday = any(
+        pct is not None
+        and (
+            lands_on_other_day(secs)
+            or (
+                show_forecast
+                and (eta := compute_limit_eta(pct, secs, window_secs)) is not None
+                and lands_on_other_day(eta)
+            )
+        )
+        for pct, secs, _ in datas
+    )
 
-    # Single-space separator, then pct in gradient colour. Right-justify
-    # within 3 digits so 0/26/100 share a vertical anchor.
-    colour = _pct_color(pct, width=width)
-    prefix = "~" if from_cache else ""
-    pct_str = f" {prefix}{pct:>3g}%"
-    cell.append(pct_str, style=colour)
+    cells: list[_WindowCell] = []
+    for pct, secs, from_cache in datas:
+        if pct is None:
+            cells.append(_NA_CELL)
+            continue
+        forecast = compute_forecast(pct, secs, window_secs) if show_forecast else None
+        eta = compute_limit_eta(pct, secs, window_secs) if show_forecast else None
+        prefix = "~" if from_cache else ""
+        cells.append(
+            _WindowCell(
+                pct=pct,
+                pct_str=f"{prefix}{pct:g}%",
+                clock=clock_at(now_local, secs, show_weekday=show_weekday),
+                rel=rel_duration(secs),
+                forecast=forecast,
+                fc_str=f"→{forecast}%" if forecast is not None else "",
+                eta_secs=eta,
+                eta_clock=(
+                    clock_at(now_local, eta, show_weekday=show_weekday) if eta is not None else ""
+                ),
+                eta_rel=rel_duration(eta) if eta is not None else "",
+            )
+        )
+    return cells
 
-    if forecast_slot:
-        if forecast is not None:
-            token = f"[→{forecast}%]"
-            cell.append(" ")
-            cell.append(token, style=_pct_color(float(forecast), width=width))
-            pad = forecast_slot - 1 - len(token)
-            if pad > 0:
-                cell.append(" " * pad)
+
+def _col_widths(cells: list[_WindowCell], *, include_rel: bool) -> tuple[int, int, int]:
+    """(pct, clock, rel) column widths shared by fact line and sub-line."""
+    pw = max((len(s) for c in cells for s in (c.pct_str, c.fc_str) if s), default=3)
+    cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
+    rw = 0
+    if include_rel:
+        rw = max((len(s) for c in cells for s in (c.rel, c.eta_rel) if s), default=0)
+    return pw, cw, rw
+
+
+def _window_text(c: _WindowCell, *, bar_w: int, pw: int, cw: int, rw: int, label: str = "") -> Text:
+    """Fact line + optional forecast sub-line for one window cell."""
+    t = Text()
+    if label:
+        t.append(label)
+    if c.pct is None:
+        t.append("N/A", style="grey50")
+        return t
+    t.append_text(gradient_bar(c.pct, width=bar_w))
+    t.append("  ")
+    t.append(f"{c.pct_str:>{pw}}", style=_pct_color(c.pct, width=bar_w))
+    if cw and c.clock:
+        t.append(f"  {c.clock:>{cw}}")
+        if rw and c.rel:
+            t.append(" ")
+            t.append(f"{c.rel:>{rw}}", style="dim")
+    if not (c.fc_str or c.eta_clock):
+        return t
+    t.append("\n")
+    t.append(" " * (len(label) + bar_w + 2))
+    fc_style = _pct_color(float(c.forecast), width=bar_w) if c.forecast else "grey50"
+    t.append(f"{c.fc_str:>{pw}}", style=fc_style)
+    if cw and c.eta_clock:
+        eta_style = "red" if c.eta_secs is not None and c.eta_secs < _ETA_URGENT_SECS else "dim"
+        t.append("  ")
+        t.append(f"{c.eta_clock:>{cw}}", style=eta_style)
+        if rw and c.eta_rel:
+            t.append(" ")
+            t.append(f"{c.eta_rel:>{rw}}", style=eta_style)
+    return t
+
+
+def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) -> Text:
+    """Two-line account label: markers + name, plan badge dimmed beneath."""
+    name = row.account.name
+    is_active = name == active
+    if row.account.pinned:
+        # Pinned wins over chosen: a pinned account is always chosen, the ★
+        # carries more information.
+        m2, m2_style = "★", "yellow"
+    elif name == chosen:
+        m2, m2_style = ">", "green"
+    else:
+        m2, m2_style = " ", ""
+    t = Text()
+    t.append("@" if is_active else " ", style="cyan bold")
+    t.append(m2, style=m2_style)
+    t.append(f" {name}", style="bold" if is_active else "")
+    plan = plan_label(row.account.plan)
+    if plan:
+        t.append(f"\n   {plan}", style="dim")
+    return t
+
+
+def _sub_text(row: DashboardRow, *, now: datetime) -> Text:
+    """Two-line subscription cell: coloured days left, absolute date beneath."""
+    txt, style = fmt_sub_expiry(
+        row.account.effective_expires_at,
+        status=row.account.subscription_status,
+        now=now,
+    )
+    t = Text()
+    if not txt:
+        return t
+    t.append(txt, style=style or "")
+    expires_at = row.account.effective_expires_at
+    if expires_at is not None:
+        t.append("\n")
+        t.append(expires_at.astimezone().strftime("%d %b"), style="dim")
+    return t
+
+
+def _status_text(row: DashboardRow) -> Text:
+    label, style = _STATUS_LABELS[row.status]
+    t = Text()
+    t.append(label, style=style)
+    if row.note:
+        t.append(f"  {row.note}", style="dim")
+    return t
+
+
+def _render_table(
+    rows: list[DashboardRow],
+    *,
+    console: Console,
+    chosen: str | None,
+    active: str | None,
+    now: datetime,
+    now_local: datetime,
+    show_forecast: bool,
+) -> bool:
+    """Render the wide table; ``False`` when even the rel-less layout is too wide."""
+    cells5 = _window_cells(
+        rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
+    )
+    cells7 = _window_cells(
+        rows, "week", FORECAST_WINDOW_7D_SECONDS, now_local=now_local, show_forecast=show_forecast
+    )
+    labels = [_label_text(r, chosen=chosen, active=active) for r in rows]
+    subs = [_sub_text(r, now=now) for r in rows]
+    label_w = max((max(len(ln) for ln in lbl.plain.split("\n")) for lbl in labels), default=0)
+    sub_w = max((max(len(ln) for ln in s.plain.split("\n")) for s in subs if s.plain), default=0)
+    sub_w = max(sub_w, len("sub"))
+
+    for include_rel in (True, False):
+        pw5, cw5, rw5 = _col_widths(cells5, include_rel=include_rel)
+        pw7, cw7, rw7 = _col_widths(cells7, include_rel=include_rel)
+
+        def text_w(pw: int, cw: int, rw: int) -> int:
+            return 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0)
+
+        overhead = label_w + sub_w + 3 * 2 + text_w(pw5, cw5, rw5) + text_w(pw7, cw7, rw7)
+        slack = (console.width - overhead) // 2
+        if slack < _BAR_MIN:
+            continue
+        bar_w = min(slack, _BAR_MAX)
+
+        table = Table.grid(padding=(0, 2))
+        table.add_column("label", no_wrap=True)
+        table.add_column("h5", no_wrap=True)
+        table.add_column("w7", no_wrap=True)
+        table.add_column("sub", no_wrap=True, justify="right")
+        table.add_row(
+            "", Text("5h", style="bold"), Text("week", style="bold"), Text("sub", style="bold")
+        )
+        for row, lbl, c5, c7, sub in zip(rows, labels, cells5, cells7, subs, strict=True):
+            if row.status in _STATUS_LABELS:
+                table.add_row(lbl, Text("N/A", style="grey50"), _status_text(row), sub)
+                continue
+            table.add_row(
+                lbl,
+                _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5),
+                _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7),
+                sub,
+            )
+        console.print()
+        console.print(table)
+        return True
+    return False
+
+
+def _render_cards(
+    rows: list[DashboardRow],
+    *,
+    console: Console,
+    chosen: str | None,
+    active: str | None,
+    now: datetime,
+    now_local: datetime,
+    show_forecast: bool,
+) -> None:
+    """Narrow-terminal fallback: one compact card per account."""
+    cells5 = _window_cells(
+        rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
+    )
+    cells7 = _window_cells(
+        rows, "week", FORECAST_WINDOW_7D_SECONDS, now_local=now_local, show_forecast=show_forecast
+    )
+    for row, c5, c7 in zip(rows, cells5, cells7, strict=True):
+        console.print()
+        plan = plan_label(row.account.plan)
+        header = Text()
+        name = row.account.name
+        is_active = name == active
+        header.append("@" if is_active else " ", style="cyan bold")
+        if row.account.pinned:
+            header.append("★", style="yellow")
         else:
-            cell.append(" " * forecast_slot)
+            header.append(">" if name == chosen else " ", style="green")
+        header.append(f" {name}", style="bold" if is_active else "")
+        if plan:
+            header.append(f" · {plan}", style="dim")
+        exp_txt, exp_style = fmt_sub_expiry(
+            row.account.effective_expires_at,
+            status=row.account.subscription_status,
+            now=now,
+        )
+        if exp_txt:
+            header.append(" · ", style="dim")
+            header.append(exp_txt, style=exp_style or "")
+            expires_at = row.account.effective_expires_at
+            if expires_at is not None:
+                header.append(f" ({expires_at.astimezone().strftime('%d %b')})", style="dim")
+        console.print(header)
 
-    reset_str = fmt_reset(reset_secs) or ""
-    if reset_width:
-        # Right-justify so the trailing "m" / "h" / "d" unit marker lines
-        # up vertically across rows, regardless of whether the shorter row
-        # dropped its leading ``0d``/``0h`` segment.
-        cell.append(f"  {reset_str:>{reset_width}}")
-    elif reset_str:
-        cell.append(f"  {reset_str}")
+        if row.status in _STATUS_LABELS:
+            console.print(Text("   ").append_text(_status_text(row)))
+            continue
 
-    return cell
+        both = [c5, c7]
+        pw = max((len(s) for c in both for s in (c.pct_str, c.fc_str) if s), default=3)
+        cw = max((len(s) for c in both for s in (c.clock, c.eta_clock) if s), default=0)
+        rw = max((len(s) for c in both for s in (c.rel, c.eta_rel) if s), default=0)
+        for label, cell in (("   5h    ", c5), ("   week  ", c7)):
+            console.print(
+                _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
+            )
 
 
 def render_dashboard(
@@ -304,114 +476,55 @@ def render_dashboard(
     *,
     chosen: str | None,
     console: Console,
+    active: str | None = None,
     now: datetime | None = None,
     show_forecast: bool = True,
 ) -> None:
     now = now or datetime.now(UTC)
-
-    # One table — header is row 0, so column widths (content-driven) are
-    # shared between header and body. Separate tables compute widths
-    # independently which misaligns the column labels.
-    # `no_wrap` on the bar columns prevents rich from wrapping "  3h 52m"
-    # onto its own line when the terminal is narrow.
-    # Merge the chosen-marker into the label cell so ``>`` sits flush
-    # against the label (with one space) instead of separated by the
-    # column padding.
-    # Fixed min_width keeps headers aligned even when every row is in an
-    # error state like ``N/A`` — without them, Rich shrinks the columns
-    # to their narrowest content and the "5h" / "weekly" headers drift
-    # left into the label column.
-    # Widths are: gradient_bar(12) + " " + pct(4) + "  " + reset(6 or 10).
-    fc_extra = _FORECAST_WIDTH if show_forecast else 0
-    _H5_WIDTH = 12 + 1 + 4 + fc_extra + 2 + _RESET_WIDTH_5H
-    _W7_WIDTH = 12 + 1 + 4 + fc_extra + 2 + _RESET_WIDTH_WEEKLY
-    table = Table.grid(padding=(0, 2))
-    table.add_column("label", no_wrap=True)
-    table.add_column("h5_combined", no_wrap=True, min_width=_H5_WIDTH)
-    table.add_column("w7_combined", no_wrap=True, min_width=_W7_WIDTH)
-    # Right-justify so the trailing "d" lines up across "2d" / "25d".
-    table.add_column("expires", no_wrap=True, justify="right")
-
-    def _label(row: DashboardRow) -> str:
-        # Marker priority: pinned wins over chosen, because a pinned
-        # account is always chosen — the ★ carries more information.
-        if row.account.pinned:
-            marker = "[yellow]★[/]"
-        elif chosen == row.account.name:
-            marker = "[green]>[/]"
-        else:
-            marker = " "
-        return f"{marker} {row.account.label}"
-
-    # Header as first row (blank label cell preserves column alignment)
-    table.add_row("", "5h", "weekly", "expires")
-
-    for row in rows:
-        if row.status == "relogin":
-            table.add_row(
-                _label(row),
-                "N/A",
-                f"[red]RELOGIN[/]  [dim]{row.note}[/]",
-                "",
-            )
-            continue
-        if row.status == "rate_limited":
-            table.add_row(
-                _label(row),
-                "N/A",
-                f"[yellow]LIMITED[/]  [dim]{row.note}[/]",
-                "",
-            )
-            continue
-        if row.status == "sub_canceled":
-            table.add_row(
-                _label(row),
-                "N/A",
-                f"[red]CANCELED[/]  [dim]{row.note}[/]",
-                "",
-            )
-            continue
-
-        h5_cell = _bar_pct_reset(
-            row.h5_pct,
-            row.h5_reset_secs,
-            _fmt_5h,
-            row.from_cache,
-            reset_width=_RESET_WIDTH_5H,
-            forecast=(
-                compute_forecast(row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS)
-                if show_forecast
-                else None
-            ),
-            forecast_slot=fc_extra,
-        )
-        w7_cell = _bar_pct_reset(
-            row.w7_pct,
-            row.w7_reset_secs,
-            _fmt_weekly,
-            row.from_cache,
-            reset_width=_RESET_WIDTH_WEEKLY,
-            forecast=(
-                compute_forecast(row.w7_pct, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
-                if show_forecast
-                else None
-            ),
-            forecast_slot=fc_extra,
-        )
-        exp_text, exp_style = fmt_sub_expiry(
-            row.account.effective_expires_at,
-            status=row.account.subscription_status,
-            now=now,
-        )
-        exp_cell = f"[{exp_style}]{exp_text}[/]" if exp_style else exp_text
-        table.add_row(_label(row), h5_cell, w7_cell, exp_cell)
+    now_local = now.astimezone()
 
     console.print()
-    console.print(table)
+    console.print(Text(status_line(active, chosen), style="dim"))
+
+    kwargs: dict[str, Any] = dict(
+        console=console,
+        chosen=chosen,
+        active=active,
+        now=now,
+        now_local=now_local,
+        show_forecast=show_forecast,
+    )
+    if console.width < _CARDS_MAX_WIDTH or not _render_table(rows, **kwargs):
+        _render_cards(rows, **kwargs)
+
+    _render_risk_footer(rows, console=console, active=active, now_utc=now)
+
+
+def _render_risk_footer(
+    rows: list[DashboardRow],
+    *,
+    console: Console,
+    active: str | None,
+    now_utc: datetime,
+) -> None:
+    """Warnings + fallback recommendation; silent when everything is healthy."""
+    msgs = warning_messages(rows, active=active, now_utc=now_utc)
+    if not msgs:
+        return
+    console.print()
+    for msg in msgs:
+        line = Text(" ⚠ ", style="yellow")
+        line.append(msg)
+        console.print(line)
+    note = fallback_note(rows, active=active)
+    if note is not None:
+        line = Text(" ✦ ", style="green")
+        line.append(note)
+        console.print(line)
 
 
 # ---------------------------------------------------------------------------
-# Task 25: stale-metadata footer, compact non-TTY one-liner, status JSON
+# Stale-metadata footer, compact non-TTY one-liner, status JSON
 # ---------------------------------------------------------------------------
 
 
@@ -456,9 +569,12 @@ def compact_one_liner(row: DashboardRow) -> str:
     return f"→ {row.account.name} ({plan_label}, 5h {h5}, w7 {w7})"
 
 
-def status_json(rows: list[DashboardRow], *, chosen: str | None) -> dict[str, Any]:
+def status_json(
+    rows: list[DashboardRow], *, chosen: str | None, active: str | None = None
+) -> dict[str, Any]:
     return {
         "chosen": chosen,
+        "active": active,
         "accounts": [
             {
                 "name": r.account.name,

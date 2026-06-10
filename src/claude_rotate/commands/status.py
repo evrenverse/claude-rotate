@@ -236,19 +236,26 @@ def execute(paths: Paths, *, as_json: bool, report: bool = False) -> int:
         best, _ = pick_best(selection_pool)
         chosen = best.account.name
 
+    session = read_current_session(paths)
+    active = session.account_name if session is not None else None
+
     if report:
-        session = read_current_session(paths)
-        active = session.account_name if session is not None else None
         # Fenced (Markdown code block) only when piped/captured — e.g. by the
         # bundled skill, which relays the output into a chat UI. A real
         # terminal gets the clean table without the ``` fences.
         fenced = not sys.stdout.isatty()
         print(build_report(rows, chosen=chosen, active=active, fenced=fenced))
     elif as_json:
-        print(_json.dumps(status_json(rows, chosen=chosen), indent=2))
+        print(_json.dumps(status_json(rows, chosen=chosen, active=active), indent=2))
     else:
         console = Console(file=sys.stderr)
-        render_dashboard(rows, chosen=chosen, console=console, show_forecast=forecast_enabled())
+        render_dashboard(
+            rows,
+            chosen=chosen,
+            active=active,
+            console=console,
+            show_forecast=forecast_enabled(),
+        )
         render_stale_footer(rows, console=console)
 
     if relogin_count > 0:
