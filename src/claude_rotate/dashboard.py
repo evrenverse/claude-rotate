@@ -4,8 +4,8 @@
 relative durations are dropped first when space gets tight, and below
 ``_CARDS_MAX_WIDTH`` the bordered table (one ruled band per account) folds
 into one card per account. Accounts that cannot be picked right now — a
-window at/over the limit or an expired subscription — render dimmed
-(``is_unusable``) so the eye skips them. Each window
+window at/over the limit or an expired subscription — render flattened to
+uniform grey (``is_unusable`` + ``_greyed``) so the eye skips them. Each window
 (5h / week) renders a *fact line* (bar, usage %, reset clock + relative
 duration) and a dimmed *forecast sub-line* (projected % at reset and, when
 the limit is crossed before reset, the clock at which usage hits 100%).
@@ -190,6 +190,19 @@ _STATUS_LABELS = {
     "rate_limited": ("LIMITED", "yellow"),
     "sub_canceled": ("CANCELED", "red"),
 }
+
+
+_UNUSABLE_STYLE = "grey35"
+
+
+def _greyed(t: Text) -> Text:
+    """Flatten a styled cell to uniform dark grey — unusable rows lose their colours.
+
+    A plain row ``style=`` is not enough: per-span colours (gradient bars,
+    pct/forecast colours) sit above the row style and would survive, leaving the
+    row merely darkened instead of visibly out of rotation.
+    """
+    return Text(t.plain, style=_UNUSABLE_STYLE)
 
 
 def is_unusable(row: DashboardRow, *, now: datetime) -> bool:
@@ -425,19 +438,23 @@ def _render_table(
         table.add_column("week", no_wrap=True)
         table.add_column("sub", no_wrap=True, justify="right")
         for row, lbl, c5, c7, sub in zip(rows, labels, cells5, cells7, subs, strict=True):
-            row_style = "dim" if is_unusable(row, now=now) else ""
+            unusable = is_unusable(row, now=now)
             if row.status in _STATUS_LABELS:
+                # The status label stays loud even when the row is greyed out —
+                # it asks for action.
                 table.add_row(
-                    lbl, Text("N/A", style="grey50"), _status_text(row), sub, style=row_style
+                    _greyed(lbl) if unusable else lbl,
+                    Text("N/A", style="grey50"),
+                    _status_text(row),
+                    _greyed(sub) if unusable else sub,
                 )
                 continue
-            table.add_row(
-                lbl,
-                _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5),
-                _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7),
-                sub,
-                style=row_style,
-            )
+            t5 = _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5)
+            t7 = _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7)
+            if unusable:
+                table.add_row(_greyed(lbl), _greyed(t5), _greyed(t7), _greyed(sub))
+            else:
+                table.add_row(lbl, t5, t7, sub)
         console.print()
         console.print(table)
         return True
@@ -463,7 +480,7 @@ def _render_cards(
     )
     for row, c5, c7 in zip(rows, cells5, cells7, strict=True):
         console.print()
-        card_style = "dim" if is_unusable(row, now=now) else ""
+        unusable = is_unusable(row, now=now)
         plan = plan_label(row.account.plan)
         header = Text()
         name = row.account.name
@@ -487,10 +504,11 @@ def _render_cards(
             expires_at = row.account.effective_expires_at
             if expires_at is not None:
                 header.append(f" ({expires_at.astimezone().strftime('%d %b')})", style="dim")
-        console.print(header, style=card_style)
+        console.print(_greyed(header) if unusable else header)
 
         if row.status in _STATUS_LABELS:
-            console.print(Text("   ").append_text(_status_text(row)), style=card_style)
+            # Loud status label even on a greyed card — it asks for action.
+            console.print(Text("   ").append_text(_status_text(row)))
             continue
 
         both = [c5, c7]
@@ -498,10 +516,8 @@ def _render_cards(
         cw = max((len(s) for c in both for s in (c.clock, c.eta_clock) if s), default=0)
         rw = max((len(s) for c in both for s in (c.rel, c.eta_rel) if s), default=0)
         for label, cell in (("   5h    ", c5), ("   week  ", c7)):
-            console.print(
-                _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label),
-                style=card_style,
-            )
+            line = _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
+            console.print(_greyed(line) if unusable else line)
 
 
 def render_dashboard(
