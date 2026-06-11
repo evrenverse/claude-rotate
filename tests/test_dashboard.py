@@ -672,19 +672,19 @@ def test_is_unusable_false_for_healthy_account() -> None:
     assert not is_unusable(_row(_acc("a"), h5_pct=None, w7_pct=None, status="relogin"), now=now)
 
 
-def test_render_dims_unusable_row() -> None:
-    # ANSI capture: the exhausted account's name must carry the dim attribute.
+def test_render_greys_out_unusable_row() -> None:
+    # ANSI capture: the exhausted account's row is flattened to uniform grey —
+    # no truecolor gradient (38;2;…) survives; the healthy row keeps its colours.
     rows = [
         _row(_acc("dead"), h5_pct=102.0, w7_pct=25.0),
         _row(_acc("fresh"), h5_pct=10.0, w7_pct=20.0),
     ]
-    console = Console(file=StringIO(), force_terminal=True, width=120)
+    console = Console(file=StringIO(), force_terminal=True, color_system="truecolor", width=120)
     render_dashboard(rows, chosen="fresh", console=console)
     out = console.file.getvalue()
-    dead_line = next(ln for ln in out.splitlines() if "dead" in ln)
-    fresh_line = next(ln for ln in out.splitlines() if "fresh" in ln and "dead" not in ln)
-    dim_then_name = "\x1b[2m" in dead_line.split("dead")[0]
-    assert dim_then_name
-    # The healthy row's name segment is not dimmed (borders are, so check the
-    # style active right before the name: rich resets styles per segment).
-    assert "\x1b[2m fresh" not in fresh_line
+    table_lines = [ln for ln in out.splitlines() if "│" in ln]
+    dead_line = next(ln for ln in table_lines if "dead" in ln)
+    fresh_line = next(ln for ln in table_lines if "fresh" in ln)
+    assert "38;2;" not in dead_line  # gradient colours stripped
+    assert "38;2;" in fresh_line  # healthy row keeps the gradient bar
+    assert "38;5;240" in dead_line  # grey35 applied
