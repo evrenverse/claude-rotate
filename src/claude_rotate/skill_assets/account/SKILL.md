@@ -13,9 +13,10 @@ of every configured account, via `claude-rotate`.
 ## How to run
 
 Run the command and show its output to the user **verbatim** — it is already
-formatted (a status line, one fenced block per account, and warnings). Keep
-every code fence intact so each account stays its own card. Do not reformat,
-merge the blocks, summarize, or add commentary.
+formatted (a status line, one fenced block per account, and — only when action
+is needed — a short warnings list). Keep every code fence intact so each account
+stays its own card. Do not reformat, merge the blocks, summarize, or add
+commentary.
 
 ```bash
 claude-rotate status --report
@@ -40,8 +41,9 @@ as-is. Never fabricate numbers.
   window resets first, a lone `—` when there is no trend yet, or `reached` once
   usage is already ≥100%. Both lines share one column grid, so the forecast %
   stacks under the current % and the limit-ETA clock under the reset clock.
-- **Warnings**: weekly usage ≥ 90 %, forecast > 100 %, subscription expiring in
-  under 7 days, accounts needing re-login, plus the freest fallback account.
+- **Warnings** (only when action is needed; absent otherwise): an account needs
+  re-login, or a subscription expires within 7 days. Quota-usage risk and the
+  fallback recommendation are intentionally not shown.
 
 ## Maintenance
 

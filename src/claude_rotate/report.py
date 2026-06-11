@@ -44,7 +44,6 @@ from claude_rotate.insights import (
     compute_forecast,
     compute_limit_eta,
     days_left,
-    fallback_note,
     pct_str,
     rel_duration,
     status_line,
@@ -194,18 +193,15 @@ def _bar(pct: float | None, width: int = _BAR_WIDTH) -> str:
 
 
 def _warnings(rows: Sequence[DashboardRow], *, active: str | None, now_utc: datetime) -> list[str]:
+    """Action-needed lines (re-login / expiring subscription); empty when none.
+
+    Quota-risk warnings and the fallback recommendation were intentionally
+    dropped — the per-account cards already carry usage and forecast.
+    """
     msgs = warning_messages(rows, active=active, now_utc=now_utc)
-
-    # Nothing wrong → no fallback advice; keep the all-clear line meaningful.
     if not msgs:
-        return ["✅ All accounts healthy."]
-
-    warns = [f"- {msg}" for msg in msgs]
-    note = fallback_note(rows, active=active)
-    if note is not None:
-        warns.append(f"- {note}")
-
-    return ["⚠️ Warnings:", *warns]
+        return []
+    return ["⚠️ Warnings:", *[f"- {msg}" for msg in msgs]]
 
 
 def build_report(
@@ -249,6 +245,6 @@ def build_report(
         lines.append(card)
         if fenced:
             lines.append("```")
-        lines.append("")  # blank line between blocks (and before the warnings)
+        lines.append("")  # blank line between account blocks (and before warnings)
     lines.extend(_warnings(ordered, active=active, now_utc=now_utc))
     return "\n".join(lines)

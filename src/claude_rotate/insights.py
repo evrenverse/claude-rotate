@@ -14,15 +14,13 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from claude_rotate.config import FORECAST_WINDOW_5H_SECONDS, FORECAST_WINDOW_7D_SECONDS
+from claude_rotate.config import FORECAST_WINDOW_7D_SECONDS
 
 if TYPE_CHECKING:
     from claude_rotate.dashboard import DashboardRow
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
-WEEKLY_RISK_PCT = 90.0
-FORECAST_RISK_PCT = 100
 EXPIRY_WARN_DAYS = 7
 FALLBACK_MAX_WEEK_PCT = 80.0
 
@@ -136,7 +134,13 @@ def status_line(active: str | None, chosen: str | None) -> str:
 def warning_messages(
     rows: Sequence[DashboardRow], *, active: str | None, now_utc: datetime
 ) -> list[str]:
-    """Per-account risk messages (no prefix/bullet — callers add their own)."""
+    """Per-account action-needed messages (no prefix/bullet — callers add their own).
+
+    Only signals that call for action: an account that needs re-login (any
+    ``status`` other than ``ok``) or a subscription expiring within
+    ``EXPIRY_WARN_DAYS``. Quota usage/forecast risk is intentionally excluded —
+    the per-account bars already carry usage, and the bare projection is noise.
+    """
     warns: list[str] = []
     for row in rows:
         name = row.account.name
@@ -145,17 +149,6 @@ def warning_messages(
             detail = f" — {row.note}" if row.note else ""
             warns.append(f"{name}{tag}: {row.status}{detail}.")
             continue
-        w7 = row.w7_pct
-        w7_forecast = compute_forecast(w7, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
-        over_forecast = w7_forecast is not None and w7_forecast > FORECAST_RISK_PCT
-        if w7 is not None and (w7 >= WEEKLY_RISK_PCT or over_forecast):
-            parts = [f"week {w7:g}%"]
-            if w7_forecast is not None and over_forecast:
-                parts.append(f"forecast {w7_forecast}%")
-            warns.append(f"{name}{tag}: {', '.join(parts)} → weekly limit at risk.")
-        h5_forecast = compute_forecast(row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS)
-        if h5_forecast is not None and h5_forecast > FORECAST_RISK_PCT:
-            warns.append(f"{name}{tag}: 5h forecast {h5_forecast}% → 5h limit at risk.")
         expires_at = row.account.effective_expires_at
         if expires_at is not None:
             days = (expires_at - now_utc).days
