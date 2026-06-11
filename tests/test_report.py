@@ -236,25 +236,16 @@ def test_forecast_subline_columns_align_under_facts() -> None:
     assert week_fact.rindex(")") == week_sub.rindex(")")
 
 
-def test_warnings_flag_weekly_risk_and_forecast() -> None:
-    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
-    assert "⚠️ Warnings:" in report
-    assert "grace (active): week 94%, forecast 141% → weekly limit at risk." in report
-    assert "matri: week 100% → weekly limit at risk." in report
-
-
-def test_warnings_fallback_is_freest_non_active() -> None:
-    report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
-    assert "Fallback: stamp (week 0%, forecast 0%)." in report
-
-
-def test_healthy_when_no_risks() -> None:
+def test_report_drops_quota_risk_and_fallback() -> None:
+    # Heavy weekly usage but ok status and no near expiry → no warnings block.
     rows = [
-        _row("a", h5=10.0, w7=20.0, h5_reset=_HOUR, w7_reset=_DAY),
+        _row("a", h5=95.0, w7=95.0, h5_reset=_HOUR, w7_reset=_DAY),
         _row("b", h5=5.0, w7=10.0, h5_reset=_HOUR, w7_reset=_DAY),
     ]
     report = build_report(rows, chosen="a", active="a", now=NOW)
-    assert "✅ All accounts healthy." in report
+    assert "at risk" not in report
+    assert "Fallback" not in report
+    assert "⚠️ Warnings:" not in report
 
 
 def test_error_row_surfaces_status_not_numbers() -> None:
