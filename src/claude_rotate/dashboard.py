@@ -2,7 +2,10 @@
 
 ``render_dashboard`` is responsive: gradient bars grow with the terminal,
 relative durations are dropped first when space gets tight, and below
-``_CARDS_MAX_WIDTH`` the table folds into one card per account. Each window
+``_CARDS_MAX_WIDTH`` the bordered table (one ruled band per account) folds
+into one card per account. Accounts that cannot be picked right now — a
+window at/over the limit or an expired subscription — render dimmed
+(``is_unusable``) so the eye skips them. Each window
 (5h / week) renders a *fact line* (bar, usage %, reset clock + relative
 duration) and a dimmed *forecast sub-line* (projected % at reset and, when
 the limit is crossed before reset, the clock at which usage hits 100%).
@@ -17,6 +20,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from rich import box
 from rich.console import Console
 from rich.table import Table
 from rich.text import Text
@@ -25,13 +29,13 @@ from claude_rotate.accounts import Account
 from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
+    HEADROOM_PERCENT,
     STALE_METADATA_WARN_DAYS,
 )
 from claude_rotate.insights import (
     clock_at,
     compute_forecast,
     compute_limit_eta,
-    fallback_note,
     plan_label,
     rel_duration,
     status_line,
@@ -46,6 +50,7 @@ __all__ = [
     "fmt_sub_expiry",
     "forecast_enabled",
     "gradient_bar",
+    "is_unusable",
     "render_dashboard",
     "render_stale_footer",
     "status_json",
@@ -185,6 +190,23 @@ _STATUS_LABELS = {
     "rate_limited": ("LIMITED", "yellow"),
     "sub_canceled": ("CANCELED", "red"),
 }
+
+
+def is_unusable(row: DashboardRow, *, now: datetime) -> bool:
+    """Whether this account cannot be picked right now — drives the dimmed row.
+
+    Mirrors ``selection.is_usable`` (a window at/over ``HEADROOM_PERCENT`` takes
+    the account out of rotation) and additionally treats an expired subscription
+    as unusable. Error-status rows (relogin/canceled) keep their loud coloured
+    labels instead — those need action, not de-emphasis.
+    """
+    if row.status == "ok":
+        if row.h5_pct is not None and row.h5_pct >= HEADROOM_PERCENT:
+            return True
+        if row.w7_pct is not None and row.w7_pct >= HEADROOM_PERCENT:
+            return True
+    expires_at = row.account.effective_expires_at
+    return expires_at is not None and expires_at <= now
 
 
 @dataclass(frozen=True)
@@ -383,29 +405,38 @@ def _render_table(
         def text_w(pw: int, cw: int, rw: int) -> int:
             return 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0)
 
-        overhead = label_w + sub_w + 3 * 2 + text_w(pw5, cw5, rw5) + text_w(pw7, cw7, rw7)
+        # Bordered-table chrome: 5 vertical rules + 4 columns x 2 padding cells.
+        chrome = 5 + 4 * 2
+        overhead = label_w + sub_w + chrome + text_w(pw5, cw5, rw5) + text_w(pw7, cw7, rw7)
         slack = (console.width - overhead) // 2
         if slack < _BAR_MIN:
             continue
         bar_w = min(slack, _BAR_MAX)
 
-        table = Table.grid(padding=(0, 2))
-        table.add_column("label", no_wrap=True)
-        table.add_column("h5", no_wrap=True)
-        table.add_column("w7", no_wrap=True)
-        table.add_column("sub", no_wrap=True, justify="right")
-        table.add_row(
-            "", Text("5h", style="bold"), Text("week", style="bold"), Text("sub", style="bold")
+        table = Table(
+            box=box.ROUNDED,
+            show_lines=True,  # rule between accounts — each row reads as its own band
+            padding=(0, 1),
+            border_style="dim",
+            header_style="bold",
         )
+        table.add_column("", no_wrap=True)
+        table.add_column("5h", no_wrap=True)
+        table.add_column("week", no_wrap=True)
+        table.add_column("sub", no_wrap=True, justify="right")
         for row, lbl, c5, c7, sub in zip(rows, labels, cells5, cells7, subs, strict=True):
+            row_style = "dim" if is_unusable(row, now=now) else ""
             if row.status in _STATUS_LABELS:
-                table.add_row(lbl, Text("N/A", style="grey50"), _status_text(row), sub)
+                table.add_row(
+                    lbl, Text("N/A", style="grey50"), _status_text(row), sub, style=row_style
+                )
                 continue
             table.add_row(
                 lbl,
                 _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5),
                 _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7),
                 sub,
+                style=row_style,
             )
         console.print()
         console.print(table)
@@ -432,6 +463,7 @@ def _render_cards(
     )
     for row, c5, c7 in zip(rows, cells5, cells7, strict=True):
         console.print()
+        card_style = "dim" if is_unusable(row, now=now) else ""
         plan = plan_label(row.account.plan)
         header = Text()
         name = row.account.name
@@ -455,10 +487,10 @@ def _render_cards(
             expires_at = row.account.effective_expires_at
             if expires_at is not None:
                 header.append(f" ({expires_at.astimezone().strftime('%d %b')})", style="dim")
-        console.print(header)
+        console.print(header, style=card_style)
 
         if row.status in _STATUS_LABELS:
-            console.print(Text("   ").append_text(_status_text(row)))
+            console.print(Text("   ").append_text(_status_text(row)), style=card_style)
             continue
 
         both = [c5, c7]
@@ -467,7 +499,8 @@ def _render_cards(
         rw = max((len(s) for c in both for s in (c.rel, c.eta_rel) if s), default=0)
         for label, cell in (("   5h    ", c5), ("   week  ", c7)):
             console.print(
-                _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
+                _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label),
+                style=card_style,
             )
 
 
@@ -497,17 +530,21 @@ def render_dashboard(
     if console.width < _CARDS_MAX_WIDTH or not _render_table(rows, **kwargs):
         _render_cards(rows, **kwargs)
 
-    _render_risk_footer(rows, console=console, active=active, now_utc=now)
+    _render_action_footer(rows, console=console, active=active, now_utc=now)
 
 
-def _render_risk_footer(
+def _render_action_footer(
     rows: list[DashboardRow],
     *,
     console: Console,
     active: str | None,
     now_utc: datetime,
 ) -> None:
-    """Warnings + fallback recommendation; silent when everything is healthy."""
+    """Action-needed warnings (re-login / expiring subscription); silent otherwise.
+
+    Quota-usage risk and the fallback recommendation are intentionally omitted —
+    the per-account bars already show usage; only actionable signals remain.
+    """
     msgs = warning_messages(rows, active=active, now_utc=now_utc)
     if not msgs:
         return
@@ -515,11 +552,6 @@ def _render_risk_footer(
     for msg in msgs:
         line = Text(" ⚠ ", style="yellow")
         line.append(msg)
-        console.print(line)
-    note = fallback_note(rows, active=active)
-    if note is not None:
-        line = Text(" ✦ ", style="green")
-        line.append(note)
         console.print(line)
 
 

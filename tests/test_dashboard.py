@@ -530,7 +530,8 @@ def test_render_active_account_gets_at_marker() -> None:
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
     render_dashboard(rows, chosen="b", active="a", console=console)
     lines = console.file.getvalue().splitlines()
-    assert any(ln.lstrip().startswith("@") and " a" in ln for ln in lines)
+    # The name column sits inside the table border, so strip the border rule.
+    assert any(ln.lstrip("│ ").startswith("@") and " a" in ln for ln in lines)
 
 
 def test_render_shows_absolute_reset_clock() -> None:
@@ -591,19 +592,6 @@ def test_render_cards_mode_shows_error_status() -> None:
     assert "token invalid" in out
 
 
-def test_render_risk_footer_lists_weekly_risk_and_fallback() -> None:
-    # a: Woche 95% → Warnung; b: Woche 20% → Fallback-Empfehlung
-    rows = [
-        _row(_acc("a"), w7_pct=95.0, w7_secs=86400),
-        _row(_acc("b"), w7_pct=20.0, w7_secs=86400),
-    ]
-    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
-    render_dashboard(rows, chosen="a", active="a", console=console)
-    out = console.file.getvalue()
-    assert "weekly limit at risk" in out
-    assert "Fallback: b" in out
-
-
 def test_render_no_risk_footer_when_healthy() -> None:
     rows = [_row(_acc("main"), h5_pct=10.0, w7_pct=20.0)]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
@@ -611,6 +599,21 @@ def test_render_no_risk_footer_when_healthy() -> None:
     out = console.file.getvalue()
     assert "⚠" not in out
     assert "Fallback" not in out
+
+
+def test_footer_keeps_relogin_drops_quota_risk_and_fallback() -> None:
+    # Heavy weekly usage but status ok → no quota-risk line; the relogin account
+    # still surfaces as an action-needed warning; no fallback recommendation.
+    rows = [
+        _row(_acc("a"), w7_pct=95.0, w7_secs=86400),
+        _row(_acc("dead"), h5_pct=None, w7_pct=None, status="relogin", note="token invalid"),
+    ]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
+    render_dashboard(rows, chosen="a", active="a", console=console)
+    out = console.file.getvalue()
+    assert "at risk" not in out
+    assert "Fallback" not in out
+    assert "dead: relogin" in out
 
 
 def test_status_json_includes_active() -> None:
@@ -621,3 +624,67 @@ def test_status_json_includes_active() -> None:
     assert payload["active"] == "main"
     payload = status_json(rows, chosen="main")
     assert payload["active"] is None
+
+
+# ---------------------------------------------------------------------------
+# Bordered table + dimmed unusable accounts
+# ---------------------------------------------------------------------------
+
+
+def test_render_table_draws_borders_and_row_rules() -> None:
+    rows = [_row(_acc("a")), _row(_acc("b"))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen="a", console=console)
+    out = console.file.getvalue()
+    assert "│" in out  # vertical rules
+    assert "─" in out  # horizontal rules
+    assert "├" in out  # a rule separates the two account rows
+
+
+def test_is_unusable_when_5h_window_full() -> None:
+    from claude_rotate.dashboard import is_unusable
+
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    assert is_unusable(_row(_acc("a"), h5_pct=100.0, w7_pct=20.0), now=now)
+    assert is_unusable(_row(_acc("a"), h5_pct=102.0, w7_pct=20.0), now=now)
+
+
+def test_is_unusable_when_weekly_window_full() -> None:
+    from claude_rotate.dashboard import is_unusable
+
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    assert is_unusable(_row(_acc("a"), h5_pct=10.0, w7_pct=100.0), now=now)
+
+
+def test_is_unusable_when_subscription_expired() -> None:
+    from claude_rotate.dashboard import is_unusable
+
+    acc = _acc("a", sub_days=5)
+    now = datetime(2026, 4, 22, tzinfo=UTC) + timedelta(days=6)
+    assert is_unusable(_row(acc, h5_pct=10.0, w7_pct=20.0), now=now)
+
+
+def test_is_unusable_false_for_healthy_account() -> None:
+    from claude_rotate.dashboard import is_unusable
+
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    assert not is_unusable(_row(_acc("a"), h5_pct=86.0, w7_pct=10.0), now=now)
+    assert not is_unusable(_row(_acc("a"), h5_pct=None, w7_pct=None, status="relogin"), now=now)
+
+
+def test_render_dims_unusable_row() -> None:
+    # ANSI capture: the exhausted account's name must carry the dim attribute.
+    rows = [
+        _row(_acc("dead"), h5_pct=102.0, w7_pct=25.0),
+        _row(_acc("fresh"), h5_pct=10.0, w7_pct=20.0),
+    ]
+    console = Console(file=StringIO(), force_terminal=True, width=120)
+    render_dashboard(rows, chosen="fresh", console=console)
+    out = console.file.getvalue()
+    dead_line = next(ln for ln in out.splitlines() if "dead" in ln)
+    fresh_line = next(ln for ln in out.splitlines() if "fresh" in ln and "dead" not in ln)
+    dim_then_name = "\x1b[2m" in dead_line.split("dead")[0]
+    assert dim_then_name
+    # The healthy row's name segment is not dimmed (borders are, so check the
+    # style active right before the name: rich resets styles per segment).
+    assert "\x1b[2m fresh" not in fresh_line
