@@ -9,13 +9,27 @@
 **Rotate multiple Anthropic [Claude Code](https://claude.com/claude-code) (Max / Pro) subscriptions from a single terminal.** `claude-rotate` probes each logged-in account's live 5-hour and weekly quota, picks the one with the most headroom, writes a full-scope `~/.claude/.credentials.json`, and `exec`s the real `claude` binary — no per-account shadow directories by default, no daily re-login, every Claude Code feature (Remote Control, session-scope commands, …) works.
 
 ```text
-                   5h                                 weekly                             expires
-> Max-20 work      ██░░░░░░░░░░  19% [→41%]   2h 42m  ████░░░░░░░░  34% [→147%]   5d 9h 15m  22d
-  Max-20 personal  ██████░░░░░░  51% [→67%]   1h 12m  ████████░░░░  67% [→106%]  2d 14h 30m   9d
-  Max-5 alt        ████████████ 100%             25m  ███████████░  92% [→103%]     18h 45m   4d
+Session runs on 'personal' (@); next launch rotates to 'work' (>).
+
+╭─────────────┬──────────────────────────────────┬───────────────────────────────────────┬────────╮
+│             │ 5h                               │ week                                  │    sub │
+├─────────────┼──────────────────────────────────┼───────────────────────────────────────┼────────┤
+│    alt      │ ██████████  100%  14:25    (25m) │ █████████░    92%  Sun 08:00 (18h 0m) │     4d │
+│    Max-5    │                                  │             →103%  Sun 03:02 (13h 2m) │ 17 Jun │
+├─────────────┼──────────────────────────────────┼───────────────────────────────────────┼────────┤
+│ @  personal │ █████░░░░░   51%  15:12 (1h 12m) │ ███████░░░    67%  Tue 04:00 (2d 14h) │     9d │
+│    Max-20   │             →67%                 │             →106%  Mon 18:12  (2d 4h) │ 22 Jun │
+├─────────────┼──────────────────────────────────┼───────────────────────────────────────┼────────┤
+│  > work     │ ██░░░░░░░░   19%  16:42 (2h 42m) │ ███░░░░░░░    34%  Thu 23:00  (5d 9h) │    22d │
+│    Max-20   │             →41%                 │             →146%  Tue 17:42  (3d 3h) │ 05 Jul │
+╰─────────────┴──────────────────────────────────┴───────────────────────────────────────┴────────╯
+
+ ⚠ alt: subscription expires in 4d.
 ```
 
-The `[→XX%]` after each percentage is a linear forecast of where that quota lands at window reset if the current burn rate holds — dropped once a window is already at/over 100% (see `Max-5 alt`'s 5h, where you're already at the wall). Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
+The dashboard sorts accounts by subscription expiry (soonest first) and adapts to your terminal — gradient bars grow with the available width, and below ~76 columns the table folds into one compact card per account. First-column markers: `@` the account this session runs on, `>` the next rotation pick, `★` a pinned account, `⊘` a manually disabled one. Accounts that can't be picked right now (a window at the limit, an expired subscription, or a disabled account) render greyed-out so the eye skips them.
+
+Each account spans two lines per window: a **fact line** (usage bar, current %, reset clock + countdown) and a dimmed **forecast sub-line**. The `→XX%` projects where that quota lands at window reset if the current burn rate holds; when a window will cross 100% *before* it resets, the sub-line also shows the clock at which that happens (red under an hour away — see `alt`'s weekly). Forecasts drop once a window is already at/over 100% (see `alt`'s 5h, where you're at the wall). A footer flags accounts that need action — a re-login or a soon-expiring subscription. Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
 
 Built for developers and AI agents that burn through a single Max plan before lunch and want to keep working against Claude Code without hitting the 5-hour wall.
 
@@ -83,6 +97,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate status --report` | Compact single-table overview: running account (`@`), next pick (`>`), per-window resets (clock + weekday + relative) and warnings |
 | `claude-rotate status --json` | Machine-readable state |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |
+| `claude-rotate disable <name>` / `enable <name>` | Take an account out of rotation (never auto-picked, still probed + shown greyed-out) / put it back |
 | `claude-rotate set-expiry <name> <value>` | Override subscription expiry (`YYYY-MM-DD`, `Nd`, or `""`) |
 | `claude-rotate rename <old> <new>` | Rename an account handle |
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
@@ -112,7 +127,7 @@ Invoke it as `/account` (or just ask which account is active). The skill is a th
 On every `claude-rotate run`:
 
 1. **Pre-run reconcile** — read `~/.claude/.credentials.json` and sync any in-session token rotation back into `accounts.json` before picking.
-2. **Pick** the account with the most 5-hour and weekly quota headroom (or the pinned account, if any).
+2. **Pick** the account with the most 5-hour and weekly quota headroom — honouring a pin (`★`) and skipping any disabled (`⊘`) account.
 3. **Refresh the access token** if it's older than 4 hours, using the OAuth refresh token stored in `accounts.json`.
 4. **Write `~/.claude/.credentials.json`** with full scopes (`user:profile`, `user:inference`, `user:sessions:claude_code`, `user:mcp_servers`, `user:file_upload`) — the same shape Claude Code's own `/login` produces.
 5. **`exec claude`** with `CLAUDE_CODE_OAUTH_TOKEN` and any inherited `CLAUDE_CONFIG_DIR` stripped from the child environment (session isolation re-sets `CLAUDE_CONFIG_DIR` per account — see below). Claude Code reads the credentials file exactly as it would after a manual `/login`; every session-scope feature (Remote Control, `/code-review ultra`, …) works.
