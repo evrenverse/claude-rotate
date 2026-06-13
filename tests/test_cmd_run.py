@@ -172,3 +172,75 @@ def test_run_honours_pin(tmp_path) -> None:
     mock_exec.assert_called_once()
     assert mock_exec.call_args[0][0].name == "b"
     assert mock_exec.call_args[0][0].runtime_token == b_pinned.runtime_token
+
+
+def test_run_excludes_disabled_account(tmp_path) -> None:
+    """A disabled account is never picked, even with the best quota."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    from dataclasses import replace
+
+    a = _acc("a")
+    b_disabled = replace(_acc("b"), disabled=True)
+    Store(p).save({"a": a, "b": b_disabled})
+
+    # Disabled "b" has the freshest quota (5%); enabled "a" is worse (50%).
+    # Without the disable the heuristic would pick "b" — disable forces "a".
+    with (
+        patch("claude_rotate.commands.run.refresh_stale_accounts"),
+        patch("claude_rotate.commands.run.refresh_stale_tokens", return_value=False),
+        patch(
+            "claude_rotate.commands.run.probe_many",
+            return_value=[
+                Candidate(
+                    account=a,
+                    h5_pct=50.0,
+                    w7_pct=50.0,
+                    h5_reset_secs=3600,
+                    w7_reset_secs=86400,
+                ),
+                Candidate(
+                    account=b_disabled,
+                    h5_pct=5.0,
+                    w7_pct=5.0,
+                    h5_reset_secs=3600,
+                    w7_reset_secs=86400,
+                ),
+            ],
+        ) as probe,
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.ensure_fresh", side_effect=lambda a, _p: a),
+        patch("claude_rotate.commands.run.exec_claude") as mock_exec,
+    ):
+        execute(p, [])
+    # Both accounts were probed — the dashboard shows the full picture
+    probed = probe.call_args[0][0]
+    assert sorted(x.name for x in probed) == ["a", "b"]
+    # But selection excluded the disabled account
+    mock_exec.assert_called_once()
+    assert mock_exec.call_args[0][0].name == "a"
+
+
+def test_run_all_disabled_refuses(tmp_path, capsys) -> None:
+    """When every account is disabled, run refuses (exit 3) and never execs."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    from dataclasses import replace
+
+    Store(p).save(
+        {
+            "a": replace(_acc("a"), disabled=True),
+            "b": replace(_acc("b"), disabled=True),
+        }
+    )
+    with (
+        patch("claude_rotate.commands.run.refresh_stale_accounts"),
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.probe_many") as mock_probe,
+        patch("claude_rotate.commands.run.exec_claude") as mock_exec,
+    ):
+        rc = execute(p, [])
+    assert rc == 3
+    assert "disabled" in capsys.readouterr().err.lower()
+    mock_exec.assert_not_called()
+    mock_probe.assert_not_called()  # short-circuits before probing

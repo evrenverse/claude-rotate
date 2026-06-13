@@ -222,14 +222,18 @@ def execute(paths: Paths, *, as_json: bool, report: bool = False) -> int:
         )
         resolved.append(c)
 
-    # Selection must honour pinning — same logic as run.py so the dashboard
-    # agrees on which account gets the ``>``/``★`` marker.
+    # Selection must honour disabling + pinning — same logic as run.py so the
+    # dashboard agrees on which account gets the ``>``/``★`` marker. Disabled
+    # accounts are excluded entirely (and never fall back into the pool); if
+    # nothing usable remains, ``chosen`` stays None.
     pinned_names = {a.name for a in accounts.values() if a.pinned}
+    disabled_names = {a.name for a in accounts.values() if a.disabled}
+    enabled = [c for c in resolved if c.account.name not in disabled_names]
     selection_pool = (
-        [c for c in resolved if c.account.name in pinned_names] if pinned_names else resolved
+        [c for c in enabled if c.account.name in pinned_names] if pinned_names else enabled
     )
     if not selection_pool:
-        selection_pool = resolved  # pinned failed probe → fall back
+        selection_pool = enabled  # pinned failed probe → fall back to enabled only
 
     chosen = None
     if selection_pool:

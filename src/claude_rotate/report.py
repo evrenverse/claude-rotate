@@ -113,6 +113,8 @@ def _render_cards(
         days = days_left(row.account.effective_expires_at, now_utc)
         if days != "-":
             head += f" · {days} left"
+        if row.account.disabled:
+            head += " · disabled"
 
         specs = (
             ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS),

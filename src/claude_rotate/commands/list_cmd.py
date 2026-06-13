@@ -37,8 +37,13 @@ def execute(paths: Paths) -> int:
     table.add_column("flags", no_wrap=True)
 
     for name, a in sorted(accounts.items()):
-        # Pinned indicator — leading ★, same convention as dashboard's ">"
-        marker = "[yellow]★[/]" if a.pinned else " "
+        # Marker — ⊘ disabled, ★ pinned (mutually exclusive), else blank.
+        if a.disabled:
+            marker = "[grey50]⊘[/]"
+        elif a.pinned:
+            marker = "[yellow]★[/]"
+        else:
+            marker = " "
 
         # Expiry column (reuses dashboard colour gradient)
         exp_text, exp_style = fmt_sub_expiry(
@@ -48,14 +53,17 @@ def execute(paths: Paths) -> int:
         )
         exp_cell = f"[{exp_style}]{exp_text}[/]" if exp_style and exp_text else exp_text
 
-        # Stale warning — only for OAuth-logged-in accounts
-        flags = ""
+        # Flags — manual disable plus the stale-metadata warning (OAuth accounts).
+        flag_parts: list[str] = []
+        if a.disabled:
+            flag_parts.append("[grey50]disabled[/]")
         if a.refresh_token is not None:
             last = a.metadata_refreshed_at
             age_days = None if last is None else (now - last).days
             if age_days is None or age_days > STALE_METADATA_WARN_DAYS:
                 age_label = f"{age_days}d" if age_days is not None else "never"
-                flags = f"[yellow]⚠ stale {age_label}[/]"
+                flag_parts.append(f"[yellow]⚠ stale {age_label}[/]")
+        flags = "  ".join(flag_parts)
 
         email = a.email or "[dim]<no email>[/]"
 

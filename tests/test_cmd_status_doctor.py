@@ -557,6 +557,60 @@ def test_doctor_warns_on_stale_refresh_token(tmp_path, monkeypatch, capsys) -> N
     assert "stale" in err.lower() or "20d" in err
 
 
+def test_status_does_not_choose_disabled_account(tmp_path, capsys) -> None:
+    """A disabled account never receives the chosen (>) marker, even with best quota."""
+    from dataclasses import replace
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    enabled = _acc("on")
+    disabled = replace(_acc("off"), disabled=True)
+    Store(p).save({"on": enabled, "off": disabled})
+
+    from claude_rotate.selection import Candidate
+
+    # Disabled "off" has the freshest quota, but must not be chosen.
+    cands = [
+        Candidate(
+            account=enabled, h5_pct=50.0, w7_pct=50.0, h5_reset_secs=3600, w7_reset_secs=86400
+        ),
+        Candidate(
+            account=disabled, h5_pct=5.0, w7_pct=5.0, h5_reset_secs=3600, w7_reset_secs=86400
+        ),
+    ]
+    with patch("claude_rotate.commands.status.probe_many", return_value=cands):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=True)
+    out = json.loads(capsys.readouterr().out)
+    assert out["chosen"] == "on"
+    by_name = {a["name"]: a for a in out["accounts"]}
+    assert by_name["off"]["disabled"] is True
+
+
+def test_status_all_disabled_has_no_chosen(tmp_path, capsys) -> None:
+    """When every account is disabled, status still lists them but chooses none."""
+    from dataclasses import replace
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    disabled = replace(_acc("a"), disabled=True)
+    Store(p).save({"a": disabled})
+
+    from claude_rotate.selection import Candidate
+
+    cand = Candidate(
+        account=disabled, h5_pct=10.0, w7_pct=10.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+    with patch("claude_rotate.commands.status.probe_many", return_value=[cand]):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=True)
+    out = json.loads(capsys.readouterr().out)
+    assert out["chosen"] is None
+    assert out["accounts"][0]["disabled"] is True
+
+
 def test_status_forecast_env_off_passes_show_forecast_false(tmp_path, monkeypatch) -> None:
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)

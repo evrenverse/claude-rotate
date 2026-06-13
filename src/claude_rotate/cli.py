@@ -17,6 +17,8 @@ ROTATOR_COMMANDS = {
     "rename",
     "pin",
     "unpin",
+    "disable",
+    "enable",
     "status",
     "doctor",
     "set-expiry",
@@ -40,6 +42,8 @@ Commands:
   rename       Rename an account
   pin          Pin an account so it is always used
   unpin        Resume rotation
+  disable      Exclude an account from rotation (manual, reversible)
+  enable       Re-include a disabled account in rotation
   status       Show the quota dashboard
   doctor       Self-check: binary, config, network
   set-expiry   Override subscription end date manually
@@ -119,6 +123,37 @@ Pin an account so it is always chosen, bypassing rotation.\
 _PIN_EPILOG = """\
 Arguments:
   name                 Account handle to pin
+
+Options:
+  -h, --help           Show this help\
+"""
+
+_DISABLE_DESCRIPTION = """\
+Manually exclude an account from rotation.
+
+A disabled account is never auto-picked — not even as a last resort when
+every other account is exhausted. It is still probed and shown on the
+dashboard (greyed out, with a "disabled" hint), so you keep the full
+picture. Reverse with `claude-rotate enable <name>`. Any number of
+accounts may be disabled at once; disabling a pinned account clears the
+pin.\
+"""
+
+_DISABLE_EPILOG = """\
+Arguments:
+  name                 Account handle (or email) to disable
+
+Options:
+  -h, --help           Show this help\
+"""
+
+_ENABLE_DESCRIPTION = """\
+Re-include a previously disabled account in rotation.\
+"""
+
+_ENABLE_EPILOG = """\
+Arguments:
+  name                 Account handle (or email) to enable
 
 Options:
   -h, --help           Show this help\
@@ -330,6 +365,32 @@ def _build_parser() -> argparse.ArgumentParser:
         add_help=True,
     )
 
+    # disable
+    sp_disable = sub.add_parser(
+        "disable",
+        help="Exclude an account from rotation",
+        usage="claude-rotate disable <name>",
+        description=_DISABLE_DESCRIPTION,
+        epilog=_DISABLE_EPILOG,
+        formatter_class=fmt,
+        add_help=False,
+    )
+    sp_disable.add_argument("name", help=_SUPPRESS)
+    sp_disable.add_argument("-h", "--help", action="help", help=_SUPPRESS)
+
+    # enable
+    sp_enable = sub.add_parser(
+        "enable",
+        help="Re-include a disabled account in rotation",
+        usage="claude-rotate enable <name>",
+        description=_ENABLE_DESCRIPTION,
+        epilog=_ENABLE_EPILOG,
+        formatter_class=fmt,
+        add_help=False,
+    )
+    sp_enable.add_argument("name", help=_SUPPRESS)
+    sp_enable.add_argument("-h", "--help", action="help", help=_SUPPRESS)
+
     # status
     sp_status = sub.add_parser(
         "status",
@@ -478,6 +539,14 @@ def main(argv: list[str] | None = None) -> int:
             from claude_rotate.commands import pin
 
             return pin.execute(p, name=None, pinned=False)
+        if args.command == "disable":
+            from claude_rotate.commands import disable
+
+            return disable.execute(p, args.name, disabled=True)
+        if args.command == "enable":
+            from claude_rotate.commands import disable
+
+            return disable.execute(p, args.name, disabled=False)
         if args.command == "status":
             from claude_rotate.commands import status
 

@@ -59,6 +59,22 @@ __all__ = [
 _FILLED = "█"
 _EMPTY = "░"
 
+# Accounts with no known subscription expiry sort after every dated one.
+_FAR_FUTURE = datetime.max.replace(tzinfo=UTC)
+
+
+def _by_expiry(rows: list[DashboardRow]) -> list[DashboardRow]:
+    """Order rows so the earliest-expiring subscription is first.
+
+    Accounts with no known expiry sort last; ties break on name for a stable
+    order. Disabled accounts are not special-cased — they sort by expiry like
+    any other and render greyed-out via ``is_unusable``.
+    """
+    return sorted(
+        rows,
+        key=lambda r: (r.account.effective_expires_at or _FAR_FUTURE, r.account.name),
+    )
+
 
 def _interp(a: int, b: int, t: float) -> int:
     return int(a * (1 - t) + b * t)
@@ -210,9 +226,12 @@ def is_unusable(row: DashboardRow, *, now: datetime) -> bool:
 
     Mirrors ``selection.is_usable`` (a window at/over ``HEADROOM_PERCENT`` takes
     the account out of rotation) and additionally treats an expired subscription
-    as unusable. Error-status rows (relogin/canceled) keep their loud coloured
-    labels instead — those need action, not de-emphasis.
+    — or a manually ``disabled`` account — as unusable. Error-status rows
+    (relogin/canceled) keep their loud coloured labels instead — those need
+    action, not de-emphasis.
     """
+    if row.account.disabled:
+        return True
     if row.status == "ok":
         if row.h5_pct is not None and row.h5_pct >= HEADROOM_PERCENT:
             return True
@@ -343,7 +362,10 @@ def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) ->
     """Two-line account label: markers + name, plan badge dimmed beneath."""
     name = row.account.name
     is_active = name == active
-    if row.account.pinned:
+    if row.account.disabled:
+        # Manually out of rotation — neither chosen nor pinnable.
+        m2, m2_style = "⊘", "grey50"
+    elif row.account.pinned:
         # Pinned wins over chosen: a pinned account is always chosen, the ★
         # carries more information.
         m2, m2_style = "★", "yellow"
@@ -356,8 +378,11 @@ def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) ->
     t.append(m2, style=m2_style)
     t.append(f" {name}", style="bold" if is_active else "")
     plan = plan_label(row.account.plan)
-    if plan:
-        t.append(f"\n   {plan}", style="dim")
+    sub = f"{plan} · disabled" if (plan and row.account.disabled) else (plan or "")
+    if not sub and row.account.disabled:
+        sub = "disabled"
+    if sub:
+        t.append(f"\n   {sub}", style="dim")
     return t
 
 
@@ -486,13 +511,17 @@ def _render_cards(
         name = row.account.name
         is_active = name == active
         header.append("@" if is_active else " ", style="cyan bold")
-        if row.account.pinned:
+        if row.account.disabled:
+            header.append("⊘", style="grey50")
+        elif row.account.pinned:
             header.append("★", style="yellow")
         else:
             header.append(">" if name == chosen else " ", style="green")
         header.append(f" {name}", style="bold" if is_active else "")
         if plan:
             header.append(f" · {plan}", style="dim")
+        if row.account.disabled:
+            header.append(" · disabled", style="dim")
         exp_txt, exp_style = fmt_sub_expiry(
             row.account.effective_expires_at,
             status=row.account.subscription_status,
@@ -531,6 +560,9 @@ def render_dashboard(
 ) -> None:
     now = now or datetime.now(UTC)
     now_local = now.astimezone()
+
+    # Always order the table by subscription expiry, earliest first.
+    rows = _by_expiry(rows)
 
     console.print()
     console.print(Text(status_line(active, chosen), style="dim"))
@@ -644,6 +676,7 @@ def status_json(
                 "status": r.status,
                 "note": r.note,
                 "from_cache": r.from_cache,
+                "disabled": r.account.disabled,
                 "subscription_expires_at": (
                     r.account.effective_expires_at.isoformat()
                     if r.account.effective_expires_at
