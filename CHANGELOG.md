@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-06-13
+
+### Added
+
+- **`claude-rotate disable <name>` / `enable <name>`.** Manually take an
+  account out of rotation without removing it. A disabled account is never
+  auto-picked — not even as a last-resort fallback when every other account is
+  exhausted (`run` refuses to launch and points you at `enable` when *all*
+  accounts are disabled) — yet it is still probed and shown so you keep the
+  full picture: the dashboard, `list`, and `--report` render it greyed-out
+  with a `disabled` hint and a `⊘` marker. Disabling is reversible and may
+  apply to any number of accounts at once; disabling a pinned account clears
+  the pin, and pinning a disabled account clears the disable (the two are
+  mutually exclusive). `status --json` gains a per-account `disabled` boolean.
+- **`status` table sorted by subscription expiry.** The dashboard now always
+  orders accounts so the earliest-expiring subscription is at the top
+  (accounts with no known expiry last), making the most urgent-to-use
+  subscription immediately visible.
+
 ### Changed
 
 - **Responsive `status` dashboard.** The quota dashboard now adapts to the
