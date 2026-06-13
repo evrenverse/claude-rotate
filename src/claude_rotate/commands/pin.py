@@ -21,7 +21,12 @@ def execute(paths: Paths, name: str | None, *, pinned: bool) -> int:
             print(f"error: account {name!r} not found", file=sys.stderr)
             return 1
         name = resolved
-        accounts = {k: replace(v, pinned=(k == name)) for k, v in accounts.items()}
+        # Pinning the target also clears any manual disable on it — pinning
+        # an account means "use this one", which contradicts disabling it.
+        accounts = {
+            k: replace(v, pinned=(k == name), disabled=(v.disabled and k != name))
+            for k, v in accounts.items()
+        }
         store.save(accounts)
         print(f"  ✓ Pinned: {name}", file=sys.stderr)
     else:

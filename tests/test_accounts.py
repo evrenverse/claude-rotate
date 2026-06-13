@@ -18,10 +18,11 @@ from claude_rotate.errors import ConfigError
 
 FIXTURE = Path(__file__).parent / "fixtures" / "accounts_v7.json"
 FIXTURE_V6 = Path(__file__).parent / "fixtures" / "accounts_v6.json"
+FIXTURE_V8 = Path(__file__).parent / "fixtures" / "accounts_v8.json"
 
 
 def test_schema_version() -> None:
-    assert SCHEMA_VERSION == 8
+    assert SCHEMA_VERSION == 9
 
 
 def test_v7_schema_still_loadable(tmp_path: Path) -> None:
@@ -33,6 +34,32 @@ def test_v7_schema_still_loadable(tmp_path: Path) -> None:
     for acct in loaded.values():
         assert acct.runtime_token_obtained_at is None
         assert acct.refresh_token_obtained_at is None
+
+
+def test_v8_schema_still_loadable(tmp_path: Path) -> None:
+    """v8 accounts.json (pre-disable) must still load — disabled defaults False."""
+    paths = Paths(config_dir=tmp_path / "c", cache_dir=tmp_path / "x", state_dir=tmp_path / "s")
+    paths.config_dir.mkdir(parents=True)
+    paths.accounts_file.write_text(FIXTURE_V8.read_text())
+    loaded = Store(paths).load()
+    assert loaded  # fixture is non-empty
+    for acct in loaded.values():
+        assert acct.disabled is False
+
+
+def test_v9_disabled_roundtrip(tmp_path: Path) -> None:
+    """The v9 disabled flag serialises and deserialises correctly."""
+    paths = Paths(config_dir=tmp_path / "c", cache_dir=tmp_path / "x", state_dir=tmp_path / "s")
+    paths.config_dir.mkdir(parents=True)
+    acct = Account(
+        name="test",
+        runtime_token="sk-ant-oat01-" + "a" * 100,
+        label="Test",
+        created_at=datetime(2026, 4, 23, 10, 0, tzinfo=UTC),
+        disabled=True,
+    )
+    Store(paths).save({"test": acct})
+    assert Store(paths).load()["test"].disabled is True
 
 
 def test_v8_roundtrip(tmp_path: Path) -> None:
@@ -120,11 +147,13 @@ def test_account_from_dict_with_subscription_expiry() -> None:
 def test_account_to_dict_roundtrip() -> None:
     raw = json.loads(FIXTURE.read_text())["accounts"]["main"]
     a = account_from_dict("main", raw)
-    # v8 adds two obtained_at keys absent from the v7 fixture; default None.
+    # v8 adds two obtained_at keys and v9 adds ``disabled``, all absent from
+    # the v7 fixture; they default to None / False.
     expected = {
         **raw,
         "runtime_token_obtained_at": None,
         "refresh_token_obtained_at": None,
+        "disabled": False,
     }
     assert a.to_dict() == expected
 

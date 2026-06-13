@@ -102,6 +102,21 @@ def test_list_with_no_accounts_prints_hint(tmp_path, monkeypatch, capsys) -> Non
     assert "login" in out.lower()
 
 
+def test_disable_enable_dispatch(monkeypatch, tmp_path) -> None:
+    # `disable <name>` and `enable <name>` route to disable.execute with the
+    # right ``disabled`` kwarg.
+    monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))
+    with patch("claude_rotate.commands.disable.execute") as mock_disable:
+        mock_disable.return_value = 0
+        assert main(["disable", "acct"]) == 0
+        assert main(["enable", "acct"]) == 0
+    assert mock_disable.call_count == 2
+    assert mock_disable.call_args_list[0].kwargs["disabled"] is True
+    assert mock_disable.call_args_list[1].kwargs["disabled"] is False
+    # both forwarded the account name positionally
+    assert mock_disable.call_args_list[0].args[1] == "acct"
+
+
 def test_status_json_flag(tmp_path, monkeypatch, capsys) -> None:
     # status --json is a rotator subcommand flag, should still work
     monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))

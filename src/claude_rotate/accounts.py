@@ -22,10 +22,10 @@ from typing import Any
 from claude_rotate.config import Paths
 from claude_rotate.errors import ConfigError, LockTimeoutError
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 # Older schema versions that load without migration logic (new fields absent
 # become None/default; saves always write the current SCHEMA_VERSION).
-COMPATIBLE_SCHEMA_VERSIONS = {6, 7, 8}
+COMPATIBLE_SCHEMA_VERSIONS = {6, 7, 8, 9}
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -80,6 +80,14 @@ class Account:
     timestamps drive that decision. The refresh-token stamp also feeds
     ``doctor``'s stale-token warning independently of the metadata
     refresh cadence.
+
+    Schema v9 adds ``disabled`` — a user-set manual exclusion via
+    ``claude-rotate disable`` / ``enable``. A disabled account is removed
+    from the selection pool entirely (never auto-picked, not even as a
+    last-resort fallback), while still being probed and shown — rendered
+    greyed-out with a "disabled" hint on the dashboard, list, and report.
+    It is orthogonal to ``pinned`` (the two are mutually exclusive in
+    practice: disabling clears a pin, pinning clears the disabled flag).
     """
 
     name: str
@@ -96,6 +104,7 @@ class Account:
     subscription_expires_at_manual: datetime | None = None  # NEW in v7
     runtime_token_obtained_at: datetime | None = None  # NEW in v8
     refresh_token_obtained_at: datetime | None = None  # NEW in v8
+    disabled: bool = False  # NEW in v9
 
     @property
     def effective_expires_at(self) -> datetime | None:
@@ -114,6 +123,7 @@ class Account:
             "subscription_expires_at_manual": _fmt_iso(self.subscription_expires_at_manual),
             "subscription_status": self.subscription_status,
             "pinned": self.pinned,
+            "disabled": self.disabled,
             "metadata_refreshed_at": _fmt_iso(self.metadata_refreshed_at),
             "runtime_token_obtained_at": _fmt_iso(self.runtime_token_obtained_at),
             "refresh_token_obtained_at": _fmt_iso(self.refresh_token_obtained_at),
@@ -155,6 +165,7 @@ def account_from_dict(name: str, raw: dict[str, Any]) -> Account:
         subscription_expires_at_manual=_parse_iso(raw.get("subscription_expires_at_manual")),
         subscription_status=raw.get("subscription_status"),
         pinned=bool(raw.get("pinned", False)),
+        disabled=bool(raw.get("disabled", False)),
         metadata_refreshed_at=_parse_iso(raw.get("metadata_refreshed_at")),
         refresh_token=raw.get("refresh_token"),
         runtime_token_obtained_at=_parse_iso(raw.get("runtime_token_obtained_at")),

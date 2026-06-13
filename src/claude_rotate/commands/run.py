@@ -49,6 +49,12 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         _print_no_accounts_message()
         return 3
 
+    # Every account manually disabled → refuse before probing. Launching a
+    # disabled account would defeat the whole point of `disable`.
+    if all(a.disabled for a in accounts.values()):
+        _print_all_disabled_message()
+        return 3
+
     # Proactively refresh any account whose access token is stale BEFORE
     # we probe. Without this the probe hits Anthropic with a dead token,
     # the dashboard flags the account as 'relogin', and — even though a
@@ -69,6 +75,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     # only constrains the selection pool, not what the user sees.
     pool = list(accounts.values())
     pinned_names = {a.name for a in pool if a.pinned}
+    disabled_names = {a.name for a in pool if a.disabled}
 
     candidates = probe_many(pool)
     cache = UsageCache(paths)
@@ -177,26 +184,35 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             )
         resolved.append(c)
 
-    if not resolved:
-        # No data anywhere → nothing to rotate. Exec first account with cached token.
-        # Prefer pinned if one exists — honouring the user's intent even with no probe data.
+    # Disabled accounts are never selection candidates (they remain in
+    # dashboard_rows so the user still sees them, greyed out).
+    enabled_resolved = [c for c in resolved if c.account.name not in disabled_names]
+
+    if not enabled_resolved:
+        # No probe data for any *enabled* account → exec the first enabled
+        # account with its cached token. Prefer a pinned-enabled one. An
+        # enabled account is guaranteed to exist (all-disabled returned above).
         first = next(
-            (a for a in accounts.values() if a.pinned),
-            next(iter(accounts.values())),
+            (a for a in accounts.values() if a.pinned and not a.disabled),
+            next(a for a in accounts.values() if not a.disabled),
         )
         StateLog(paths).event("exec", chosen=first.name, reason="no_probe_data")
         _emit_rows(dashboard_rows, chosen=first.name)
         fresh = ensure_fresh(first, paths)
         return exec_claude(fresh, paths, claude_args)
 
-    # Pinning: restrict the selection pool to the pinned account(s) only.
-    # Non-pinned accounts stay in dashboard_rows so the user still sees them.
+    # Pinning: restrict the (already disabled-filtered) pool to the pinned
+    # account(s) only. Non-pinned accounts stay in dashboard_rows so the user
+    # still sees them.
     selection_pool = (
-        [c for c in resolved if c.account.name in pinned_names] if pinned_names else resolved
+        [c for c in enabled_resolved if c.account.name in pinned_names]
+        if pinned_names
+        else enabled_resolved
     )
     if not selection_pool:
-        # Pinned account(s) all failed live probe; fall back to whatever we have
-        selection_pool = resolved
+        # Pinned account(s) all failed live probe; fall back to the enabled
+        # set — never to a disabled account.
+        selection_pool = enabled_resolved
 
     best, wait_msg = pick_best(selection_pool)
 
@@ -204,7 +220,9 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     # is a lie when the pool was trimmed by pinning — rotation would
     # rescue us if the user unpinned. Rewrite the message to say that.
     if wait_msg and pinned_names:
-        has_alternative = any(c.account.name not in pinned_names and is_usable(c) for c in resolved)
+        has_alternative = any(
+            c.account.name not in pinned_names and is_usable(c) for c in enabled_resolved
+        )
         in_idx = wait_msg.find(" in ")
         remainder = wait_msg[in_idx:] if in_idx != -1 else ""
         wait_msg = f"pinned account {best.account.label!r} exhausted; available{remainder}"
@@ -241,6 +259,15 @@ def _print_no_accounts_message() -> None:
         )
     print(
         "\n  Run: claude-rotate login <email> [name]\n",
+        file=sys.stderr,
+    )
+
+
+def _print_all_disabled_message() -> None:
+    print("", file=sys.stderr)
+    print("  All accounts are manually disabled — nothing to rotate.", file=sys.stderr)
+    print(
+        "\n  Re-enable one with: claude-rotate enable <name>\n",
         file=sys.stderr,
     )
 

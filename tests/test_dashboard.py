@@ -688,3 +688,53 @@ def test_render_greys_out_unusable_row() -> None:
     assert "38;2;" not in dead_line  # gradient colours stripped
     assert "38;2;" in fresh_line  # healthy row keeps the gradient bar
     assert "38;5;240" in dead_line  # grey35 applied
+
+
+def test_is_unusable_when_disabled() -> None:
+    from dataclasses import replace
+
+    from claude_rotate.dashboard import is_unusable
+
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    disabled = replace(_acc("a"), disabled=True)
+    # Healthy quota, but manually disabled → still unusable (greyed out).
+    assert is_unusable(_row(disabled, h5_pct=5.0, w7_pct=5.0), now=now)
+
+
+def test_status_json_includes_disabled_flag() -> None:
+    from dataclasses import replace
+
+    from claude_rotate.dashboard import status_json
+
+    rows = [
+        _row(_acc("on")),
+        _row(replace(_acc("off"), disabled=True)),
+    ]
+    payload = status_json(rows, chosen="on")
+    by_name = {a["name"]: a for a in payload["accounts"]}
+    assert by_name["on"]["disabled"] is False
+    assert by_name["off"]["disabled"] is True
+
+
+def test_render_shows_disabled_hint() -> None:
+    from dataclasses import replace
+
+    rows = [_row(replace(_acc("paused"), disabled=True), h5_pct=5.0, w7_pct=5.0)]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen=None, console=console)
+    assert "disabled" in console.file.getvalue()
+
+
+def test_render_sorts_by_earliest_expiry() -> None:
+    # aaa expires in 2 days, bbb in 20, ccc has no known expiry → the table
+    # must order them aaa, bbb, ccc (earliest first, unknown last).
+    fixed_now = datetime(2026, 4, 22, tzinfo=UTC)
+    rows = [
+        _row(_acc("bbb", sub_days=20)),
+        _row(_acc("ccc")),
+        _row(_acc("aaa", sub_days=2)),
+    ]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+    render_dashboard(rows, chosen=None, console=console, now=fixed_now)
+    out = console.file.getvalue()
+    assert out.index("aaa") < out.index("bbb") < out.index("ccc")
