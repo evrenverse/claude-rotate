@@ -59,3 +59,32 @@ def test_read_records_ignores_corrupt_files(tmp_path) -> None:
     (p.sessions_dir / "bad.json").write_text("{not json")
     sessions.write_record(p, SessionRecord("u1", "matri", 1, 1.0, 2.0, 2.0))
     assert [r.uuid for r in sessions.read_records(p)] == ["u1"]
+
+
+def test_reap_removes_dead_records(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    sessions.write_record(p, SessionRecord("alive", "matri", 1, 1.0, 2.0, 2.0))
+    sessions.write_record(p, SessionRecord("dead", "ply", 2, 1.0, 2.0, 2.0))
+
+    def fake_liveness(pid: int, start_time: float) -> bool:
+        return pid == 1
+
+    sessions.reap(p, liveness=fake_liveness)
+    assert [r.uuid for r in sessions.read_records(p)] == ["alive"]
+
+
+def test_is_alive_matches_start_time(tmp_path) -> None:
+    import os
+
+    from claude_rotate import sessions
+
+    me = os.getpid()
+    st = sessions.process_start_time(me)
+    assert st is not None
+    assert sessions.is_alive(me, st) is True
+    # A mismatched start_time (PID reuse) must read as dead.
+    assert sessions.is_alive(me, st + 9999.0) is False
+    # A surely-dead PID reads as dead.
+    assert sessions.is_alive(2_000_000_000, 0.0) is False
