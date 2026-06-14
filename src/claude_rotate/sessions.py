@@ -178,10 +178,7 @@ def count_load(
         bucket = active if (now - rec.last_active) < active_window else idle
         bucket[rec.account] = bucket.get(rec.account, 0) + 1
     names = set(active) | set(idle)
-    return {
-        name: SessionLoad(active=active.get(name, 0), idle=idle.get(name, 0))
-        for name in names
-    }
+    return {name: SessionLoad(active=active.get(name, 0), idle=idle.get(name, 0)) for name in names}
 
 
 @contextmanager

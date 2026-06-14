@@ -8,8 +8,12 @@ from claude_rotate.sessions import SessionLoad, SessionRecord
 
 def test_session_record_roundtrip() -> None:
     rec = SessionRecord(
-        uuid="u1", account="matri", pid=4242,
-        start_time=1000.0, started_at=2000.0, last_active=2050.0,
+        uuid="u1",
+        account="matri",
+        pid=4242,
+        start_time=1000.0,
+        started_at=2000.0,
+        last_active=2050.0,
     )
     assert SessionRecord.from_dict(rec.to_dict()) == rec
 
@@ -104,9 +108,7 @@ def test_count_load_classifies_active_idle_and_reaps(tmp_path) -> None:
     def fake_liveness(pid: int, start_time: float) -> bool:
         return pid != 9  # spend's process is dead
 
-    loads = sessions.count_load(
-        p, now=now, active_window=90.0, liveness=fake_liveness
-    )
+    loads = sessions.count_load(p, now=now, active_window=90.0, liveness=fake_liveness)
     assert loads["matri"] == sessions.SessionLoad(active=1, idle=1)
     assert loads["ply"] == sessions.SessionLoad(active=1, idle=0)
     assert "spend" not in loads
