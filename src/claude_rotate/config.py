@@ -36,6 +36,17 @@ BALANCE_THRESHOLD_PERCENT = 30.0
 PACE_MIN_ELAPSED_SECONDS = 900
 METADATA_REFRESH_DAYS = 7
 STALE_METADATA_WARN_DAYS = 10
+# Live-session tracking — feeds the load-aware selection dampener. A freshly
+# launched session counts as "active" for this window even before any heartbeat
+# fires (last_active is initialised to started_at); afterwards only heartbeats
+# keep it active, by which time real usage shows up in the probe.
+SESSION_ACTIVE_WINDOW_SECONDS = 90
+# Weight of an idle (open but not recently active) session relative to an
+# active one when summing per-account load.
+SESSION_IDLE_WEIGHT = 0.3
+# Strength of the per-load-unit penalty in the tier-3 drain score
+# (session_load_availability = max(0, 1 - weighted_load * penalty)).
+SESSION_LOAD_PENALTY = 0.25
 
 # Forecast windows — used by the status dashboard's [→XX%] projection to
 # derive elapsed time from seconds-until-reset. Same lengths the Bash
@@ -95,6 +106,14 @@ class Paths:
     @property
     def current_session_file(self) -> Path:
         return self.state_dir / "current-session.json"
+
+    @property
+    def sessions_dir(self) -> Path:
+        return self.state_dir / "sessions"
+
+    @property
+    def sessions_lock(self) -> Path:
+        return self.state_dir / "sessions.lock"
 
 
 def paths() -> Paths:
