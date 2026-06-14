@@ -18,6 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+import psutil
+
 from claude_rotate.config import Paths
 
 
@@ -116,3 +118,33 @@ def touch(paths: Paths, uuid: str, *, now: float) -> None:
     from dataclasses import replace
 
     write_record(paths, replace(rec, last_active=now))
+
+
+# A liveness predicate: (pid, start_time) -> still the same live process?
+Liveness = Callable[[int, float], bool]
+
+# create_time() is float seconds; we store it rounded, so allow slack.
+_START_TIME_TOLERANCE = 1.5
+
+
+def process_start_time(pid: int) -> float | None:
+    """Process creation time (epoch secs), or None if the pid is gone."""
+    try:
+        return psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+        return None
+
+
+def is_alive(pid: int, start_time: float) -> bool:
+    """True iff ``pid`` exists AND its start time matches (guards PID reuse)."""
+    actual = process_start_time(pid)
+    if actual is None:
+        return False
+    return abs(actual - start_time) <= _START_TIME_TOLERANCE
+
+
+def reap(paths: Paths, *, liveness: Liveness = is_alive) -> None:
+    """Delete records whose backing process is no longer alive."""
+    for rec in read_records(paths):
+        if not liveness(rec.pid, rec.start_time):
+            remove_record(paths, rec.uuid)
