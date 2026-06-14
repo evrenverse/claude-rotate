@@ -41,6 +41,7 @@ from claude_rotate.insights import (
     status_line,
     warning_messages,
 )
+from claude_rotate.sessions import SessionLoad
 
 __all__ = [
     "DashboardRow",
@@ -53,6 +54,7 @@ __all__ = [
     "is_unusable",
     "render_dashboard",
     "render_stale_footer",
+    "session_indicator",
     "status_json",
 ]
 
@@ -122,6 +124,7 @@ class DashboardRow:
     from_cache: bool = False
     status: str = "ok"  # "ok" | "relogin" | "rate_limited" | "sub_canceled" | "no_data"
     note: str = ""
+    session_load: SessionLoad | None = None
 
 
 _EXPIRY_GRADIENT_DAYS = 30
@@ -189,6 +192,18 @@ def forecast_enabled() -> bool:
     in the separate (external) Bash statusline project so the two UIs agree.
     """
     return os.environ.get("CLAUDE_ROTATE_FORECAST", "1") != "0"
+
+
+def session_indicator(load: SessionLoad | None) -> str:
+    """Compact 'N active · M idle' string; empty when nothing is open."""
+    if load is None or load.open == 0:
+        return ""
+    parts: list[str] = []
+    if load.active:
+        parts.append(f"{load.active} active")
+    if load.idle:
+        parts.append(f"{load.idle} idle")
+    return " · ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -383,6 +398,9 @@ def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) ->
         sub = "disabled"
     if sub:
         t.append(f"\n   {sub}", style="dim")
+    indicator = session_indicator(row.session_load)
+    if indicator:
+        t.append(f"\n   {indicator}", style="dim cyan")
     return t
 
 
@@ -677,6 +695,11 @@ def status_json(
                 "note": r.note,
                 "from_cache": r.from_cache,
                 "disabled": r.account.disabled,
+                "sessions": (
+                    {"active": r.session_load.active, "idle": r.session_load.idle}
+                    if r.session_load is not None and r.session_load.open > 0
+                    else None
+                ),
                 "subscription_expires_at": (
                     r.account.effective_expires_at.isoformat()
                     if r.account.effective_expires_at
