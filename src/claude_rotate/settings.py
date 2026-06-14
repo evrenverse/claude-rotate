@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from claude_rotate.config import Paths
@@ -100,33 +100,13 @@ def _coerce_bool(value: str) -> bool:
 def set_value(paths: Paths, key: str, value: str) -> RotateConfig:
     cfg = load_config(paths)
     if key == "session_isolation":
-        cfg = RotateConfig(
-            session_isolation=_coerce_bool(value),
-            auto_resume_enabled=cfg.auto_resume_enabled,
-            auto_resume_message=cfg.auto_resume_message,
-            session_tracking=cfg.session_tracking,
-        )
+        cfg = replace(cfg, session_isolation=_coerce_bool(value))
     elif key == "auto_resume.enabled":
-        cfg = RotateConfig(
-            session_isolation=cfg.session_isolation,
-            auto_resume_enabled=_coerce_bool(value),
-            auto_resume_message=cfg.auto_resume_message,
-            session_tracking=cfg.session_tracking,
-        )
+        cfg = replace(cfg, auto_resume_enabled=_coerce_bool(value))
     elif key == "auto_resume.message":
-        cfg = RotateConfig(
-            session_isolation=cfg.session_isolation,
-            auto_resume_enabled=cfg.auto_resume_enabled,
-            auto_resume_message=value,
-            session_tracking=cfg.session_tracking,
-        )
+        cfg = replace(cfg, auto_resume_message=value)
     elif key == "session_tracking":
-        cfg = RotateConfig(
-            session_isolation=cfg.session_isolation,
-            auto_resume_enabled=cfg.auto_resume_enabled,
-            auto_resume_message=cfg.auto_resume_message,
-            session_tracking=_coerce_bool(value),
-        )
+        cfg = replace(cfg, session_tracking=_coerce_bool(value))
     else:
         raise ConfigError(
             f"unknown config key {key!r}; valid keys: "
