@@ -274,3 +274,19 @@ def test_fenced_toggle() -> None:
 def test_status_line_no_active_session() -> None:
     report = build_report(_sample(), chosen="grace", active=None, now=NOW)
     assert "No active session recorded; next launch would pick 'grace' (>)." in report
+
+
+def test_report_shows_session_indicator() -> None:
+    from claude_rotate.sessions import SessionLoad
+
+    acc = _account("matri")
+    row = DashboardRow(
+        account=acc,
+        h5_pct=10.0,
+        w7_pct=10.0,
+        h5_reset_secs=3600,
+        w7_reset_secs=86400,
+        session_load=SessionLoad(active=2, idle=1),
+    )
+    out = build_report([row], chosen="matri", active=None, fenced=False)
+    assert "2 active · 1 idle" in out

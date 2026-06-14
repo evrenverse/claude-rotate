@@ -20,8 +20,9 @@ from datetime import datetime
 from rich.console import Console
 from rich.text import Text
 
+from claude_rotate import sessions
 from claude_rotate.accounts import Store
-from claude_rotate.config import Paths
+from claude_rotate.config import SESSION_ACTIVE_WINDOW_SECONDS, Paths
 from claude_rotate.dashboard import (
     DashboardRow,
     forecast_enabled,
@@ -281,6 +282,11 @@ def _collect(paths: Paths) -> _Collected:
 
     session = read_current_session(paths)
     active = session.account_name if session is not None else None
+
+    loads = sessions.count_load(
+        paths, now=time.time(), active_window=float(SESSION_ACTIVE_WINDOW_SECONDS)
+    )
+    rows = [replace(r, session_load=loads.get(r.account.name)) for r in rows]
 
     return _Collected(
         rows=rows,

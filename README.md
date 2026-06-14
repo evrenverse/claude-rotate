@@ -103,6 +103,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
 | `claude-rotate sync-credentials` | Reconcile `~/.claude/.credentials.json` → `accounts.json` (cron entry point) |
 | `claude-rotate install-sync` / `--uninstall` | Install / remove the 2-minute sync crontab entry |
+| `claude-rotate install-hooks` / `--uninstall` | Install / remove the heartbeat hook in `~/.claude/settings.json` for precise active/idle session classification (enables load-aware distribution across concurrent runs) |
 | `claude-rotate install-skill` / `--uninstall` | Install / remove the bundled agent skill (canonical `~/.agents/skills/account`, symlinked into every detected agent) |
 | `claude-rotate cleanup [--yes]` | Delete all rotate state (accounts, cache, logs) |
 | `claude-rotate doctor` | Self-check (binary, config, tokens, refresh-token staleness) |

@@ -738,3 +738,40 @@ def test_render_sorts_by_earliest_expiry() -> None:
     render_dashboard(rows, chosen=None, console=console, now=fixed_now)
     out = console.file.getvalue()
     assert out.index("aaa") < out.index("bbb") < out.index("ccc")
+
+
+def test_session_indicator_text() -> None:
+    from claude_rotate.dashboard import session_indicator
+    from claude_rotate.sessions import SessionLoad
+
+    assert session_indicator(None) == ""
+    assert session_indicator(SessionLoad(active=0, idle=0)) == ""
+    assert session_indicator(SessionLoad(active=2, idle=1)) == "2 active · 1 idle"
+    assert session_indicator(SessionLoad(active=3, idle=0)) == "3 active"
+    assert session_indicator(SessionLoad(active=0, idle=2)) == "2 idle"
+
+
+def test_status_json_includes_sessions() -> None:
+    from datetime import UTC, datetime
+
+    from claude_rotate.accounts import Account
+    from claude_rotate.dashboard import DashboardRow, status_json
+    from claude_rotate.sessions import SessionLoad
+
+    acc = Account(
+        name="matri",
+        runtime_token="t",
+        label="matri",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        plan="max_20x",
+    )
+    row = DashboardRow(
+        account=acc,
+        h5_pct=10.0,
+        w7_pct=10.0,
+        h5_reset_secs=3600,
+        w7_reset_secs=86400,
+        session_load=SessionLoad(active=2, idle=1),
+    )
+    out = status_json([row], chosen="matri", active=None)
+    assert out["accounts"][0]["sessions"] == {"active": 2, "idle": 1}
