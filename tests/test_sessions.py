@@ -112,3 +112,14 @@ def test_count_load_classifies_active_idle_and_reaps(tmp_path) -> None:
     assert "spend" not in loads
     # dead record was reaped from disk
     assert {r.uuid for r in sessions.read_records(p)} == {"a1", "a2", "b1"}
+
+
+def test_file_lock_acquires_and_releases(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    with sessions.file_lock(p.sessions_lock):
+        pass  # acquire + release without error
+    # second acquisition after release also works
+    with sessions.file_lock(p.sessions_lock):
+        assert p.sessions_lock.exists()

@@ -11,16 +11,20 @@ Pure + testable: process liveness and ``now`` are injectable.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 import psutil
 
 from claude_rotate.config import Paths
+from claude_rotate.errors import LockTimeoutError
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,7 @@ Liveness = Callable[[int, float], bool]
 
 # create_time() is float seconds; we store it rounded, so allow slack.
 _START_TIME_TOLERANCE = 1.5
+_LOCK_TIMEOUT_SECONDS = 10
 
 
 def process_start_time(pid: int) -> float | None:
@@ -177,3 +182,33 @@ def count_load(
         name: SessionLoad(active=active.get(name, 0), idle=idle.get(name, 0))
         for name in names
     }
+
+
+@contextmanager
+def file_lock(lock_path: Path) -> Iterator[None]:
+    """Exclusive flock with a wait ceiling — mirrors accounts._FlockGuard.
+
+    Serialises the read-count → pick → reserve critical section so a burst of
+    concurrent ``run`` invocations each see the prior reservations.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = time.time() + _LOCK_TIMEOUT_SECONDS
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.time() > deadline:
+                    raise LockTimeoutError(
+                        f"another claude-rotate writer held {lock_path} "
+                        f"for >{_LOCK_TIMEOUT_SECONDS}s"
+                    ) from None
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
