@@ -13,7 +13,9 @@ accounts. The hook learns its account/session from the injected env vars.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -48,19 +50,56 @@ def _load(settings_path: Path) -> dict[str, Any]:
 
 
 def _save(settings_path: Path, data: dict[str, Any]) -> None:
+    # Atomic write: serialise to a temp file in the same dir, then os.replace
+    # onto the target so a crash/disk-full mid-write never truncates the user's
+    # real settings.json. (Not secret, so no chmod 0600 — unlike credentials.)
     settings_path.parent.mkdir(parents=True, exist_ok=True)
-    settings_path.write_text(json.dumps(data, indent=2) + "\n")
+    fd, tmp_str = tempfile.mkstemp(dir=str(settings_path.parent), prefix=".settings.json.tmp-")
+    tmp = Path(tmp_str)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        tmp.replace(settings_path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def _event_has_command(groups: list[Any], command: str) -> bool:
-    return any(h.get("command") == command for g in groups for h in g.get("hooks", []))
+    return any(
+        isinstance(h, dict) and h.get("command") == command
+        for g in groups
+        if isinstance(g, dict)
+        for h in (g.get("hooks", []) if isinstance(g.get("hooks"), list) else [])
+    )
+
+
+def _require_hooks(data: dict[str, Any], settings_path: Path) -> dict[str, list[Any]]:
+    """Return the (created-if-absent) hooks mapping, refusing a malformed shape.
+
+    Mirrors ``_load``'s "refusing to overwrite" contract: a structurally-odd but
+    valid-JSON settings file yields a clean ConfigError, never an AttributeError.
+    """
+    raw = data.get("hooks")
+    if raw is None:
+        hooks: dict[str, list[Any]] = {}
+        data["hooks"] = hooks
+        return hooks
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{settings_path} has a non-object 'hooks' section; refusing to modify.")
+    return raw
 
 
 def install(settings_path: Path) -> None:
     data = _load(settings_path)
-    if not isinstance(data.get("hooks"), dict):
-        data["hooks"] = {}
-    hooks: dict[str, list[Any]] = data["hooks"]
+    hooks = _require_hooks(data, settings_path)
+    for event, _command in HOOK_SPEC:
+        existing = hooks.get(event)
+        if existing is not None and not isinstance(existing, list):
+            raise ConfigError(
+                f"{settings_path} has a non-list '{event}' hooks entry; refusing to modify."
+            )
     for event, command in HOOK_SPEC:
         groups: list[Any] = hooks.setdefault(event, [])
         if not _event_has_command(groups, command):
