@@ -221,3 +221,36 @@ def test_exec_claude_non_isolated_writes_global(tmp_path, monkeypatch) -> None:
 
     assert "CLAUDE_CONFIG_DIR" not in captured["env"]  # type: ignore[operator]
     assert (home / ".claude" / ".credentials.json").exists()
+
+
+def test_exec_claude_injects_session_env(tmp_path, monkeypatch) -> None:
+    """With a session_uuid, the heartbeat env vars are injected for the child."""
+    from claude_rotate.config import Paths
+
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    fake_bin_dir = tmp_path / "bin"
+    fake_bin_dir.mkdir()
+    (fake_bin_dir / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (fake_bin_dir / "claude").chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin_dir))
+    paths = Paths(
+        config_dir=tmp_path / "cfg", cache_dir=tmp_path / "cache", state_dir=tmp_path / "state"
+    )
+    paths.state_dir.mkdir(parents=True)
+
+    captured: dict[str, object] = {}
+
+    def _fake_execvpe(file, args, env):
+        captured["env"] = dict(env)
+        raise SystemExit(0)
+
+    with (
+        patch("claude_rotate.exec.os.execvpe", side_effect=_fake_execvpe),
+        pytest.raises(SystemExit),
+    ):
+        exec_claude(_acc(), paths, [], session_uuid="u-123")
+
+    assert captured["env"]["CLAUDE_ROTATE_ACCOUNT"] == "main"  # type: ignore[index]
+    assert captured["env"]["CLAUDE_ROTATE_SESSION"] == "u-123"  # type: ignore[index]
