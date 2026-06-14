@@ -85,7 +85,9 @@ def build_credentials_payload(account: Account, *, now: datetime) -> Credentials
     )
 
 
-def exec_claude(account: Account, paths: Paths, args: list[str]) -> int:
+def exec_claude(
+    account: Account, paths: Paths, args: list[str], *, session_uuid: str | None = None
+) -> int:
     """Replace the current process with `claude`.
 
     Default: writes ~/.claude/.credentials.json (global) and execs.
@@ -103,6 +105,11 @@ def exec_claude(account: Account, paths: Paths, args: list[str]) -> int:
     env = dict(os.environ)
     env.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
     env.pop("CLAUDE_CONFIG_DIR", None)
+
+    # Tag the child so the heartbeat hook knows which account/session it is.
+    if session_uuid is not None:
+        env["CLAUDE_ROTATE_ACCOUNT"] = account.name
+        env["CLAUDE_ROTATE_SESSION"] = session_uuid
 
     if cfg.session_isolation:
         cfg_dir = ensure_account_config_dir(paths, account.name, home_claude=home_claude_dir())
