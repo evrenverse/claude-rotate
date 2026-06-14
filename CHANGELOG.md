@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-14
+
 ### Added
 
 - **Load-aware account distribution via live-session tracking.** A burst of
@@ -22,6 +24,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (and `--report` / `--json`) shows a per-account live-session count
   (`N active · M idle`). On by default; disable with
   `claude-rotate config set session_tracking false`.
+- **Live `status --watch` mode.** `claude-rotate status --watch [SECONDS]`
+  runs a live view on the alternate screen, re-probing and redrawing every
+  `SECONDS` (default 5, floored at 1). The slow probe runs while the previous
+  frame stays on screen, so each refresh is flicker-free; a footer shows the
+  local refresh time, the cadence, and `Ctrl-C` to quit (which exits cleanly
+  and restores the terminal). Only engages on a real terminal — piped or
+  captured runs fall through to a single render so `--json` / `--report`
+  output stays clean.
 
 ## [0.4.0] - 2026-06-13
 
