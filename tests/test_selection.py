@@ -350,3 +350,31 @@ def test_candidate_accepts_probe_error_unauthorized() -> None:
         probe_error="unauthorized",
     )
     assert c.probe_error == "unauthorized"
+
+
+def test_session_load_deprioritises_busy_account() -> None:
+    # Two equal candidates; only the second carries live-session load.
+    free = replace(_cand(h5=10.0, w7=10.0), account=_acc(name="free"))
+    busy = replace(
+        _cand(h5=10.0, w7=10.0), account=_acc(name="busy"), session_load=4.0
+    )
+    best, wait = pick_best([busy, free], now=FIXED_NOW)
+    assert wait is None
+    assert best.account.name == "free"
+
+
+def test_session_load_does_not_affect_usability() -> None:
+    from claude_rotate.selection import is_usable
+
+    loaded = replace(_cand(h5=10.0, w7=10.0), session_load=99.0)
+    assert is_usable(loaded) is True
+
+
+def test_session_load_availability_curve() -> None:
+    from claude_rotate.selection import _session_load_availability
+
+    assert _session_load_availability(replace(_cand(), session_load=0.0)) == 1.0
+    # penalty 0.25 → load 2 → 0.5
+    assert _session_load_availability(replace(_cand(), session_load=2.0)) == 0.5
+    # never negative
+    assert _session_load_availability(replace(_cand(), session_load=99.0)) == 0.0
