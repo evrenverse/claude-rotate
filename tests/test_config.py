@@ -48,3 +48,19 @@ def test_account_configs_dir_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))
     p = config.paths()
     assert p.account_configs_dir == tmp_path / "config" / "configs"
+
+
+def test_session_paths_and_constants() -> None:
+    from claude_rotate.config import (
+        SESSION_ACTIVE_WINDOW_SECONDS,
+        SESSION_IDLE_WEIGHT,
+        SESSION_LOAD_PENALTY,
+        Paths,
+    )
+
+    p = Paths(config_dir=Path("/c"), cache_dir=Path("/ca"), state_dir=Path("/s"))
+    assert p.sessions_dir == Path("/s/sessions")
+    assert p.sessions_lock == Path("/s/sessions.lock")
+    assert SESSION_ACTIVE_WINDOW_SECONDS == 90
+    assert SESSION_IDLE_WEIGHT == 0.3
+    assert SESSION_LOAD_PENALTY == 0.25
