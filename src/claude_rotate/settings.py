@@ -1,8 +1,14 @@
 """Feature configuration for claude-rotate (config.json).
 
-Two opt-in toggles, both OFF by default. A missing or corrupt config.json
-yields defaults, so installs that never configure anything keep the exact
-pre-feature behaviour.
+Three toggles — two opt-in (OFF by default), one opt-out (ON by default):
+
+* ``session_isolation``    — OFF by default; opt-in.
+* ``auto_resume_enabled``  — OFF by default; opt-in.
+* ``session_tracking``     — ON by default; opt-out. Controls load-aware
+  session distribution; the intended behaviour for new installs.
+
+A missing or corrupt config.json yields safe defaults, so installs that
+never configure anything keep the expected behaviour for all three settings.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ class RotateConfig:
     session_isolation: bool = False
     auto_resume_enabled: bool = False
     auto_resume_message: str = DEFAULT_RESUME_MESSAGE
+    session_tracking: bool = True
 
 
 def load_config(paths: Paths) -> RotateConfig:
@@ -43,10 +50,12 @@ def load_config(paths: Paths) -> RotateConfig:
     env = os.environ.get("CLAUDE_ROTATE_SESSION_ISOLATION")
     if env is not None and env.strip() != "":
         isolation = env.strip().lower() in _TRUTHY
+    session_tracking = bool(raw.get("session_tracking", True))
     return RotateConfig(
         session_isolation=isolation,
         auto_resume_enabled=bool(resume.get("enabled", False)),
         auto_resume_message=str(resume.get("message", DEFAULT_RESUME_MESSAGE)),
+        session_tracking=session_tracking,
     )
 
 
@@ -64,6 +73,7 @@ def save_config(paths: Paths, cfg: RotateConfig) -> None:
             "enabled": cfg.auto_resume_enabled,
             "message": cfg.auto_resume_message,
         },
+        "session_tracking": cfg.session_tracking,
     }
     fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=".config.json.tmp-")
     tmp = Path(tmp_str)
@@ -94,23 +104,33 @@ def set_value(paths: Paths, key: str, value: str) -> RotateConfig:
             session_isolation=_coerce_bool(value),
             auto_resume_enabled=cfg.auto_resume_enabled,
             auto_resume_message=cfg.auto_resume_message,
+            session_tracking=cfg.session_tracking,
         )
     elif key == "auto_resume.enabled":
         cfg = RotateConfig(
             session_isolation=cfg.session_isolation,
             auto_resume_enabled=_coerce_bool(value),
             auto_resume_message=cfg.auto_resume_message,
+            session_tracking=cfg.session_tracking,
         )
     elif key == "auto_resume.message":
         cfg = RotateConfig(
             session_isolation=cfg.session_isolation,
             auto_resume_enabled=cfg.auto_resume_enabled,
             auto_resume_message=value,
+            session_tracking=cfg.session_tracking,
+        )
+    elif key == "session_tracking":
+        cfg = RotateConfig(
+            session_isolation=cfg.session_isolation,
+            auto_resume_enabled=cfg.auto_resume_enabled,
+            auto_resume_message=cfg.auto_resume_message,
+            session_tracking=_coerce_bool(value),
         )
     else:
         raise ConfigError(
             f"unknown config key {key!r}; valid keys: "
-            "session_isolation, auto_resume.enabled, auto_resume.message"
+            "session_isolation, auto_resume.enabled, auto_resume.message, session_tracking"
         )
     save_config(paths, cfg)
     return cfg
