@@ -168,6 +168,8 @@ Options:
   --report             Compact single-table overview (active account + limits +
                        warnings); marks the running account (@) and next pick (>)
   --json               Output JSON instead of the coloured table
+  --watch [SECONDS]    Live view: re-probe and redraw on an alternate screen
+                       every SECONDS (default 5); Ctrl-C to quit
   -h, --help           Show this help\
 """
 
@@ -403,6 +405,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sp_status.add_argument("--report", action="store_true", help=_SUPPRESS)
     sp_status.add_argument("--json", action="store_true", help=_SUPPRESS)
+    sp_status.add_argument(
+        "--watch",
+        nargs="?",
+        const=5.0,
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help=_SUPPRESS,
+    )
     sp_status.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
     # doctor
@@ -550,7 +561,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             from claude_rotate.commands import status
 
-            return status.execute(p, as_json=args.json, report=args.report)
+            return status.execute(p, as_json=args.json, report=args.report, watch=args.watch)
         if args.command == "doctor":
             from claude_rotate.commands import doctor
 
