@@ -26,6 +26,8 @@ ROTATOR_COMMANDS = {
     "sync-credentials",
     "install-sync",
     "install-skill",
+    "install-hooks",
+    "__heartbeat",
     "config",
 }
 ROTATOR_ROOT_FLAGS = {"--version", "-V", "--help", "-h"}
@@ -51,6 +53,7 @@ Commands:
   sync-credentials   Reconcile ~/.claude/.credentials.json → accounts.json (cron entry point)
   install-sync       Install a crontab entry running sync-credentials every 2 minutes
   install-skill      Install the bundled Claude Code skill into ~/.claude/skills
+  install-hooks      Install the heartbeat hook for precise active/idle tracking
 
 Options:
   -h, --help           Show this help
@@ -475,6 +478,21 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_install_skill.add_argument("--uninstall", action="store_true", help=_SUPPRESS)
     sp_install_skill.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
+    # install-hooks
+    sp_install_hooks = sub.add_parser(
+        "install-hooks",
+        help="Install the heartbeat hook into ~/.claude/settings.json",
+        usage="claude-rotate install-hooks [--uninstall]",
+        formatter_class=fmt,
+        add_help=False,
+    )
+    sp_install_hooks.add_argument("--uninstall", action="store_true", help=_SUPPRESS)
+    sp_install_hooks.add_argument("-h", "--help", action="help", help=_SUPPRESS)
+
+    # __heartbeat (internal; called by the Claude Code hook)
+    sp_heartbeat = sub.add_parser("__heartbeat", add_help=True)
+    sp_heartbeat.add_argument("event", choices=["active", "end"])
+
     # config — feature toggles in config.json
     sp_config = sub.add_parser(
         "config",
@@ -575,6 +593,14 @@ def main(argv: list[str] | None = None) -> int:
             from claude_rotate.commands import install_skill
 
             return install_skill.execute(p, uninstall=args.uninstall)
+        if args.command == "install-hooks":
+            from claude_rotate.commands import install_hooks
+
+            return install_hooks.execute(p, uninstall=args.uninstall)
+        if args.command == "__heartbeat":
+            from claude_rotate.commands import heartbeat
+
+            return heartbeat.execute(p, args.event)
         if args.command == "config":
             from claude_rotate.commands import config as config_cmd
 

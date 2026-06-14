@@ -148,3 +148,25 @@ def test_dangerously_skip_permissions_passthrough(monkeypatch, tmp_path) -> None
     _paths, claude_args = mock_run.call_args.args
     assert "--dangerously-skip-permissions" in claude_args
     assert "-c" in claude_args
+
+
+def test_cli_dispatches_install_hooks(tmp_path, monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from claude_rotate.cli import main
+
+    monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))
+    with patch("claude_rotate.commands.install_hooks.execute", return_value=0) as m:
+        assert main(["install-hooks"]) == 0
+    m.assert_called_once()
+
+
+def test_cli_dispatches_heartbeat(tmp_path, monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from claude_rotate.cli import main
+
+    monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))
+    with patch("claude_rotate.commands.heartbeat.execute", return_value=0) as m:
+        assert main(["__heartbeat", "active"]) == 0
+    m.assert_called_once()
