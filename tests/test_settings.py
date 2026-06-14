@@ -85,3 +85,16 @@ def test_env_overrides_session_isolation(rotate_dir: Path, monkeypatch: pytest.M
     assert load_config(p).session_isolation is False
     monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
     assert load_config(p).session_isolation is False
+
+
+def test_session_tracking_defaults_on_and_roundtrips(tmp_path) -> None:
+    from claude_rotate.config import Paths
+    from claude_rotate.settings import load_config, set_value
+
+    p = Paths(
+        config_dir=tmp_path / "c", cache_dir=tmp_path / "ca", state_dir=tmp_path / "s"
+    )
+    # Default: ON even with no config.json.
+    assert load_config(p).session_tracking is True
+    set_value(p, "session_tracking", "false")
+    assert load_config(p).session_tracking is False
