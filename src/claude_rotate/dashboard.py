@@ -2,8 +2,10 @@
 
 ``render_dashboard`` is responsive: gradient bars grow with the terminal,
 relative durations are dropped first when space gets tight, and below
-``_CARDS_MAX_WIDTH`` the bordered table (one ruled band per account) folds
-into one card per account. Accounts that cannot be picked right now — a
+``_CARDS_MAX_WIDTH`` the four columns fold into a single-column bordered table
+— one ruled, framed card per account, with the header and both windows stacked
+vertically so a phone-width terminal still reads as a table. Accounts that
+cannot be picked right now — a
 window at/over the limit or an expired subscription — render flattened to
 uniform grey (``is_unusable`` + ``_greyed``) so the eye skips them. Each window
 (5h / week) renders a *fact line* (bar, usage %, reset clock + relative
@@ -504,6 +506,71 @@ def _render_table(
     return False
 
 
+def _card_text(
+    row: DashboardRow,
+    c5: _WindowCell,
+    c7: _WindowCell,
+    *,
+    chosen: str | None,
+    active: str | None,
+    now: datetime,
+    unusable: bool,
+) -> Text:
+    """One account's card body — header line plus stacked window lines.
+
+    Returned as a single (multi-line) ``Text`` so it drops into one cell of the
+    compact bordered table. Greying mirrors the wide table: an unusable account
+    flattens header and window lines to grey, but a loud error-status label
+    stays coloured because it asks for action.
+    """
+    header = Text()
+    name = row.account.name
+    is_active = name == active
+    header.append("@" if is_active else " ", style="cyan bold")
+    if row.account.disabled:
+        header.append("⊘", style="grey50")
+    elif row.account.pinned:
+        header.append("★", style="yellow")
+    else:
+        header.append(">" if name == chosen else " ", style="green")
+    header.append(f" {name}", style="bold" if is_active else "")
+    plan = plan_label(row.account.plan)
+    if plan:
+        header.append(f" · {plan}", style="dim")
+    if row.account.disabled:
+        header.append(" · disabled", style="dim")
+    exp_txt, exp_style = fmt_sub_expiry(
+        row.account.effective_expires_at,
+        status=row.account.subscription_status,
+        now=now,
+    )
+    if exp_txt:
+        header.append(" · ", style="dim")
+        header.append(exp_txt, style=exp_style or "")
+        expires_at = row.account.effective_expires_at
+        if expires_at is not None:
+            header.append(f" ({expires_at.astimezone().strftime('%d %b')})", style="dim")
+
+    card = Text()
+    card.append_text(_greyed(header) if unusable else header)
+
+    if row.status in _STATUS_LABELS:
+        # Loud status label even on a greyed card — it asks for action.
+        card.append("\n")
+        card.append_text(_status_text(row))
+        return card
+
+    both = [c5, c7]
+    pw = max((len(s) for c in both for s in (c.pct_str, c.fc_str) if s), default=3)
+    cw = max((len(s) for c in both for s in (c.clock, c.eta_clock) if s), default=0)
+    rw = max((len(s) for c in both for s in (c.rel, c.eta_rel) if s), default=0)
+    for label, cell in (("5h    ", c5), ("week  ", c7)):
+        line = _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
+        card.append("\n")
+        card.append_text(_greyed(line) if unusable else line)
+    return card
+
+
 def _render_cards(
     rows: list[DashboardRow],
     *,
@@ -514,57 +581,34 @@ def _render_cards(
     now_local: datetime,
     show_forecast: bool,
 ) -> None:
-    """Narrow-terminal fallback: one compact card per account."""
+    """Narrow-terminal layout: one bordered, ruled card per account.
+
+    Same chrome as the wide table (rounded border + a horizontal rule between
+    accounts) so a phone-width terminal still reads as a table — but the four
+    columns stack vertically inside a single cell, so each account's header and
+    both window lines fit the narrow width.
+    """
     cells5 = _window_cells(
         rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
     cells7 = _window_cells(
         rows, "week", FORECAST_WINDOW_7D_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
+    table = Table(
+        box=box.ROUNDED,
+        show_lines=True,  # rule between accounts — each card reads as its own band
+        show_header=False,
+        padding=(0, 1),
+        border_style="dim",
+    )
+    table.add_column("", no_wrap=True)
     for row, c5, c7 in zip(rows, cells5, cells7, strict=True):
-        console.print()
         unusable = is_unusable(row, now=now)
-        plan = plan_label(row.account.plan)
-        header = Text()
-        name = row.account.name
-        is_active = name == active
-        header.append("@" if is_active else " ", style="cyan bold")
-        if row.account.disabled:
-            header.append("⊘", style="grey50")
-        elif row.account.pinned:
-            header.append("★", style="yellow")
-        else:
-            header.append(">" if name == chosen else " ", style="green")
-        header.append(f" {name}", style="bold" if is_active else "")
-        if plan:
-            header.append(f" · {plan}", style="dim")
-        if row.account.disabled:
-            header.append(" · disabled", style="dim")
-        exp_txt, exp_style = fmt_sub_expiry(
-            row.account.effective_expires_at,
-            status=row.account.subscription_status,
-            now=now,
+        table.add_row(
+            _card_text(row, c5, c7, chosen=chosen, active=active, now=now, unusable=unusable)
         )
-        if exp_txt:
-            header.append(" · ", style="dim")
-            header.append(exp_txt, style=exp_style or "")
-            expires_at = row.account.effective_expires_at
-            if expires_at is not None:
-                header.append(f" ({expires_at.astimezone().strftime('%d %b')})", style="dim")
-        console.print(_greyed(header) if unusable else header)
-
-        if row.status in _STATUS_LABELS:
-            # Loud status label even on a greyed card — it asks for action.
-            console.print(Text("   ").append_text(_status_text(row)))
-            continue
-
-        both = [c5, c7]
-        pw = max((len(s) for c in both for s in (c.pct_str, c.fc_str) if s), default=3)
-        cw = max((len(s) for c in both for s in (c.clock, c.eta_clock) if s), default=0)
-        rw = max((len(s) for c in both for s in (c.rel, c.eta_rel) if s), default=0)
-        for label, cell in (("   5h    ", c5), ("   week  ", c7)):
-            line = _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
-            console.print(_greyed(line) if unusable else line)
+    console.print()
+    console.print(table)
 
 
 def render_dashboard(
