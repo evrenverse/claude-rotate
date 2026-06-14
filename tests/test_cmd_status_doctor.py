@@ -75,6 +75,49 @@ def test_status_json_outputs_valid_json(tmp_path, capsys) -> None:
     assert data["chosen"] == "main"
 
 
+def test_status_json_reports_live_sessions(tmp_path, capsys) -> None:
+    """End-to-end: status --json surfaces the live-session count from the registry."""
+    import os
+    import time
+
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"matri": _acc("matri")})
+
+    # Write a LIVE session record for "matri" backed by this process, so
+    # count_load counts it instead of reaping it. last_active=now keeps it
+    # inside the active window (active=1, idle=0).
+    pid = os.getpid()
+    now = time.time()
+    sessions.write_record(
+        p,
+        sessions.SessionRecord(
+            uuid="s1",
+            account="matri",
+            pid=pid,
+            start_time=sessions.process_start_time(pid) or 0.0,
+            started_at=now,
+            last_active=now,
+        ),
+    )
+
+    from claude_rotate.selection import Candidate
+
+    cand = Candidate(
+        account=_acc("matri"), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+    with patch("claude_rotate.commands.status.probe_many", return_value=[cand]):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=True)
+
+    out = json.loads(capsys.readouterr().out)
+    by_name = {a["name"]: a for a in out["accounts"]}
+    assert by_name["matri"]["sessions"] == {"active": 1, "idle": 0}
+
+
 def test_doctor_green_when_all_ok(tmp_path, capsys) -> None:
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True, mode=0o700)
