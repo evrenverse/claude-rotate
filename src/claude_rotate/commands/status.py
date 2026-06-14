@@ -13,12 +13,14 @@ from __future__ import annotations
 import contextlib
 import json as _json
 import sys
+import time as _time
 from dataclasses import replace
 
 from rich.console import Console
 
+from claude_rotate import sessions
 from claude_rotate.accounts import Store
-from claude_rotate.config import Paths
+from claude_rotate.config import SESSION_ACTIVE_WINDOW_SECONDS, Paths
 from claude_rotate.dashboard import (
     DashboardRow,
     forecast_enabled,
@@ -242,6 +244,11 @@ def execute(paths: Paths, *, as_json: bool, report: bool = False) -> int:
 
     session = read_current_session(paths)
     active = session.account_name if session is not None else None
+
+    loads = sessions.count_load(
+        paths, now=_time.time(), active_window=float(SESSION_ACTIVE_WINDOW_SECONDS)
+    )
+    rows = [replace(r, session_load=loads.get(r.account.name)) for r in rows]
 
     if report:
         # Fenced (Markdown code block) only when piped/captured — e.g. by the

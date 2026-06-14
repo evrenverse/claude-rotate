@@ -38,7 +38,7 @@ from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
 )
-from claude_rotate.dashboard import DashboardRow
+from claude_rotate.dashboard import DashboardRow, session_indicator
 from claude_rotate.insights import (
     clock_at,
     compute_forecast,
@@ -115,6 +115,9 @@ def _render_cards(
             head += f" · {days} left"
         if row.account.disabled:
             head += " · disabled"
+        indicator = session_indicator(row.session_load)
+        if indicator:
+            head += f" · {indicator}"
 
         specs = (
             ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS),
