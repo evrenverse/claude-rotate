@@ -3,14 +3,22 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
+import time
+import uuid as uuid_lib
 from dataclasses import replace
 from datetime import UTC, datetime
 
 from rich.console import Console
 
+from claude_rotate import sessions
 from claude_rotate.accounts import Store
-from claude_rotate.config import Paths
+from claude_rotate.config import (
+    SESSION_ACTIVE_WINDOW_SECONDS,
+    SESSION_IDLE_WEIGHT,
+    Paths,
+)
 from claude_rotate.dashboard import (
     DashboardRow,
     compact_one_liner,
@@ -23,9 +31,52 @@ from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import ProbeResult, probe_many
 from claude_rotate.refresh import ensure_fresh
 from claude_rotate.selection import Candidate, is_usable, pick_best
+from claude_rotate.settings import load_config
 from claude_rotate.state_log import StateLog
 from claude_rotate.sync import reconcile_all, refresh_stale_tokens
 from claude_rotate.usage_cache import UsageCache
+
+
+def _reserve_record(paths: Paths, account_name: str) -> str:
+    """Write a session-registry record for this run and return its uuid.
+
+    Reads our own pid + start_time — both survive execvpe, so the record points
+    at the claude process we are about to become. Best-effort.
+    """
+    run_uuid = uuid_lib.uuid4().hex
+    pid = os.getpid()
+    now = time.time()
+    sessions.write_record(
+        paths,
+        sessions.SessionRecord(
+            uuid=run_uuid,
+            account=account_name,
+            pid=pid,
+            start_time=sessions.process_start_time(pid) or 0.0,
+            started_at=now,
+            last_active=now,
+        ),
+    )
+    return run_uuid
+
+
+def _rewrite_pinned_wait(
+    wait_msg: str | None,
+    pinned_names: set[str],
+    best: Candidate,
+    enabled_resolved: list[Candidate],
+) -> str | None:
+    if not (wait_msg and pinned_names):
+        return wait_msg
+    has_alternative = any(
+        c.account.name not in pinned_names and is_usable(c) for c in enabled_resolved
+    )
+    in_idx = wait_msg.find(" in ")
+    remainder = wait_msg[in_idx:] if in_idx != -1 else ""
+    msg = f"pinned account {best.account.label!r} exhausted; available{remainder}"
+    if has_alternative:
+        msg += " — run `claude-rotate unpin` to rotate instead"
+    return msg
 
 
 def execute(paths: Paths, claude_args: list[str]) -> int:
@@ -35,7 +86,6 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
 
     # Pre-run reconcile: pull any drift the cron hasn't picked up yet.
     with contextlib.suppress(Exception):
-        from claude_rotate.settings import load_config
         from claude_rotate.sync import reconcile_isolated
 
         if load_config(paths).session_isolation:
@@ -63,8 +113,6 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     # and may show the dreaded login prompt. Refreshing up-front keeps
     # every account usable and the dashboard honest.
     with contextlib.suppress(Exception):
-        from claude_rotate.settings import load_config
-
         isolated = load_config(paths).session_isolation
         refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC), isolated=isolated)
         if refreshed:
@@ -188,6 +236,8 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     # dashboard_rows so the user still sees them, greyed out).
     enabled_resolved = [c for c in resolved if c.account.name not in disabled_names]
 
+    cfg = load_config(paths)
+
     if not enabled_resolved:
         # No probe data for any *enabled* account → exec the first enabled
         # account with its cached token. Prefer a pinned-enabled one. An
@@ -199,6 +249,10 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         StateLog(paths).event("exec", chosen=first.name, reason="no_probe_data")
         _emit_rows(dashboard_rows, chosen=first.name)
         fresh = ensure_fresh(first, paths)
+        if cfg.session_tracking:
+            return exec_claude(
+                fresh, paths, claude_args, session_uuid=_reserve_record(paths, first.name)
+            )
         return exec_claude(fresh, paths, claude_args)
 
     # Pinning: restrict the (already disabled-filtered) pool to the pinned
@@ -214,21 +268,38 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         # set — never to a disabled account.
         selection_pool = enabled_resolved
 
-    best, wait_msg = pick_best(selection_pool)
-
-    # pick_best renders "all accounts exhausted; X available in …" which
-    # is a lie when the pool was trimmed by pinning — rotation would
-    # rescue us if the user unpinned. Rewrite the message to say that.
-    if wait_msg and pinned_names:
-        has_alternative = any(
-            c.account.name not in pinned_names and is_usable(c) for c in enabled_resolved
+    if not cfg.session_tracking:
+        # Tracking disabled → exact pre-feature behaviour.
+        best, wait_msg = pick_best(selection_pool)
+        wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
+        _emit_rows(dashboard_rows, chosen=best.account.name, wait_msg=wait_msg)
+        StateLog(paths).event(
+            "exec",
+            chosen=best.account.name,
+            h5_pct=best.h5_pct,
+            w7_pct=best.w7_pct,
+            wait=wait_msg,
         )
-        in_idx = wait_msg.find(" in ")
-        remainder = wait_msg[in_idx:] if in_idx != -1 else ""
-        wait_msg = f"pinned account {best.account.label!r} exhausted; available{remainder}"
-        if has_alternative:
-            wait_msg += " — run `claude-rotate unpin` to rotate instead"
+        fresh = ensure_fresh(best.account, paths)
+        return exec_claude(fresh, paths, claude_args)
 
+    with sessions.file_lock(paths.sessions_lock):
+        loads = sessions.count_load(
+            paths, now=time.time(), active_window=float(SESSION_ACTIVE_WINDOW_SECONDS)
+        )
+        loaded_pool = [
+            replace(
+                c,
+                session_load=loads[c.account.name].weighted(idle_weight=SESSION_IDLE_WEIGHT)
+                if c.account.name in loads
+                else 0.0,
+            )
+            for c in selection_pool
+        ]
+        best, wait_msg = pick_best(loaded_pool)
+        run_uuid = _reserve_record(paths, best.account.name)
+
+    wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
     _emit_rows(dashboard_rows, chosen=best.account.name, wait_msg=wait_msg)
     StateLog(paths).event(
         "exec",
@@ -238,7 +309,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         wait=wait_msg,
     )
     fresh = ensure_fresh(best.account, paths)
-    return exec_claude(fresh, paths, claude_args)
+    return exec_claude(fresh, paths, claude_args, session_uuid=run_uuid)
 
 
 def _print_no_accounts_message() -> None:
