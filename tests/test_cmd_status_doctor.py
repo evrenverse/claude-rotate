@@ -659,3 +659,72 @@ def test_status_forecast_env_default_on(tmp_path, monkeypatch) -> None:
 
     status.execute(p, as_json=False)
     assert captured["show_forecast"] is True
+
+
+def test_status_watch_skips_live_loop_on_non_tty(tmp_path, monkeypatch) -> None:
+    """``--watch`` under a pipe/capture must NOT enter the live loop — single render."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    from claude_rotate.selection import Candidate
+
+    cand = Candidate(
+        account=_acc(), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("_run_watch must not run when stderr is not a terminal")
+
+    monkeypatch.setattr("claude_rotate.commands.status.probe_many", lambda accts: [cand])
+    monkeypatch.setattr("claude_rotate.commands.status._run_watch", _boom)
+
+    from claude_rotate.commands import status
+
+    # pytest captures stderr → Console.is_terminal is False → falls through.
+    rc = status.execute(p, as_json=False, watch=5.0)
+    assert rc == 0
+
+
+def test_run_watch_redraws_then_exits_on_keyboard_interrupt(tmp_path, monkeypatch) -> None:
+    """The live loop probes + redraws each cycle, then exits cleanly on Ctrl-C."""
+    import io
+
+    from rich.console import Console
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    from claude_rotate.selection import Candidate
+
+    cand = Candidate(
+        account=_acc(), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+
+    probe_calls = {"n": 0}
+
+    def _probe(_accts):
+        probe_calls["n"] += 1
+        return [cand]
+
+    # Break out of the otherwise-infinite loop after the second frame.
+    def _sleep(_secs):
+        if probe_calls["n"] >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("claude_rotate.commands.status.probe_many", _probe)
+    monkeypatch.setattr("claude_rotate.commands.status.time.sleep", _sleep)
+
+    from claude_rotate.commands import status
+
+    buf = io.StringIO()
+    console = Console(file=buf, force_terminal=True, width=100)
+
+    rc = status._run_watch(p, interval=5.0, as_json=False, report=False, console=console)
+
+    assert rc == 0
+    assert probe_calls["n"] >= 2  # redrew at least twice before Ctrl-C
+    out = buf.getvalue()
+    assert "refreshing every 5s" in out
+    assert "Ctrl-C to quit" in out
