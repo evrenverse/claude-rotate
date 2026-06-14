@@ -298,6 +298,8 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         ]
         best, wait_msg = pick_best(loaded_pool)
         run_uuid = _reserve_record(paths, best.account.name)
+        # If exec_claude fails below, this record is orphaned briefly but our
+        # own pid dies with the failed run, so the next count_load reaps it.
 
     wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
     _emit_rows(dashboard_rows, chosen=best.account.name, wait_msg=wait_msg)
