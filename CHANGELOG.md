@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Load-aware account distribution via live-session tracking.** A burst of
+  concurrent `claude-rotate run` invocations now fans out across accounts
+  *before* the usage probe can see the load: each run records its live session
+  in a PID-based registry (`state/sessions/`), and the selection heuristic
+  feeds the per-account session count into its tier-3 drain score as a
+  multiplicative dampener, so simultaneously-launched sessions spread out
+  instead of stampeding one account. Dead sessions are reaped lazily via
+  process liveness (`psutil`), and a dedicated lock serialises concurrent
+  picks. New `claude-rotate install-hooks` registers a heartbeat hook in
+  `~/.claude/settings.json` for precise active/idle classification; `status`
+  (and `--report` / `--json`) shows a per-account live-session count
+  (`N active · M idle`). On by default; disable with
+  `claude-rotate config set session_tracking false`.
+
 ## [0.4.0] - 2026-06-13
 
 ### Added
