@@ -346,3 +346,37 @@ def test_run_fallback_tracks_session_when_no_probe_data(tmp_path) -> None:
     recs = sessions.read_records(p)
     assert len(recs) == 1 and recs[0].account == "main"
     assert mock_exec.call_args.kwargs["session_uuid"] == recs[0].uuid
+
+
+def test_run_tracking_disabled_writes_no_record(tmp_path) -> None:
+    """session_tracking=false → pre-feature behaviour: no reservation, no uuid."""
+    from claude_rotate import sessions
+    from claude_rotate.settings import set_value
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    p.state_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+    set_value(p, "session_tracking", "false")
+
+    with (
+        patch(
+            "claude_rotate.commands.run.probe_many",
+            return_value=[
+                Candidate(
+                    account=_acc(),
+                    h5_pct=10.0,
+                    w7_pct=10.0,
+                    h5_reset_secs=3600,
+                    w7_reset_secs=86400,
+                )
+            ],
+        ),
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.ensure_fresh", side_effect=lambda a, _p: a),
+        patch("claude_rotate.commands.run.exec_claude") as mock_exec,
+    ):
+        execute(p, [])
+
+    assert sessions.read_records(p) == []
+    assert "session_uuid" not in mock_exec.call_args.kwargs
