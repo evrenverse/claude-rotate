@@ -88,3 +88,27 @@ def test_is_alive_matches_start_time(tmp_path) -> None:
     assert sessions.is_alive(me, st + 9999.0) is False
     # A surely-dead PID reads as dead.
     assert sessions.is_alive(2_000_000_000, 0.0) is False
+
+
+def test_count_load_classifies_active_idle_and_reaps(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    now = 1000.0
+    # matri: one active (fresh), one idle (stale); ply: one active; dead: gone
+    sessions.write_record(p, SessionRecord("a1", "matri", 1, 0.0, 0.0, now - 10))
+    sessions.write_record(p, SessionRecord("a2", "matri", 2, 0.0, 0.0, now - 500))
+    sessions.write_record(p, SessionRecord("b1", "ply", 3, 0.0, 0.0, now - 1))
+    sessions.write_record(p, SessionRecord("d1", "spend", 9, 0.0, 0.0, now))
+
+    def fake_liveness(pid: int, start_time: float) -> bool:
+        return pid != 9  # spend's process is dead
+
+    loads = sessions.count_load(
+        p, now=now, active_window=90.0, liveness=fake_liveness
+    )
+    assert loads["matri"] == sessions.SessionLoad(active=1, idle=1)
+    assert loads["ply"] == sessions.SessionLoad(active=1, idle=0)
+    assert "spend" not in loads
+    # dead record was reaped from disk
+    assert {r.uuid for r in sessions.read_records(p)} == {"a1", "a2", "b1"}
