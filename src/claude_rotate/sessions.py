@@ -63,3 +63,56 @@ class SessionLoad:
 
     def weighted(self, *, idle_weight: float) -> float:
         return self.active + self.idle * idle_weight
+
+
+def _record_path(paths: Paths, uuid: str) -> Path:
+    return paths.sessions_dir / f"{uuid}.json"
+
+
+def write_record(paths: Paths, record: SessionRecord) -> None:
+    """Atomically write one session record. Best-effort; never raises."""
+    try:
+        paths.sessions_dir.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(paths.sessions_dir), prefix=".tmp-")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(record.to_dict(), f)
+            os.replace(tmp, str(_record_path(paths, record.uuid)))
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+    except OSError:
+        return
+
+
+def read_records(paths: Paths) -> list[SessionRecord]:
+    """Read all session records. Corrupt/partial files are skipped."""
+    out: list[SessionRecord] = []
+    if not paths.sessions_dir.is_dir():
+        return out
+    for path in sorted(paths.sessions_dir.glob("*.json")):
+        try:
+            out.append(SessionRecord.from_dict(json.loads(path.read_text())))
+        except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
+def remove_record(paths: Paths, uuid: str) -> None:
+    """Delete one record. Best-effort; missing file is fine."""
+    try:
+        _record_path(paths, uuid).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def touch(paths: Paths, uuid: str, *, now: float) -> None:
+    """Refresh last_active on an existing record. No-op if it is gone."""
+    path = _record_path(paths, uuid)
+    try:
+        rec = SessionRecord.from_dict(json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return
+    from dataclasses import replace
+
+    write_record(paths, replace(rec, last_active=now))
