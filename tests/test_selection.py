@@ -355,9 +355,7 @@ def test_candidate_accepts_probe_error_unauthorized() -> None:
 def test_session_load_deprioritises_busy_account() -> None:
     # Two equal candidates; only the second carries live-session load.
     free = replace(_cand(h5=10.0, w7=10.0), account=_acc(name="free"))
-    busy = replace(
-        _cand(h5=10.0, w7=10.0), account=_acc(name="busy"), session_load=4.0
-    )
+    busy = replace(_cand(h5=10.0, w7=10.0), account=_acc(name="busy"), session_load=4.0)
     best, wait = pick_best([busy, free], now=FIXED_NOW)
     assert wait is None
     assert best.account.name == "free"
@@ -378,3 +376,26 @@ def test_session_load_availability_curve() -> None:
     assert _session_load_availability(replace(_cand(), session_load=2.0)) == 0.5
     # never negative
     assert _session_load_availability(replace(_cand(), session_load=99.0)) == 0.0
+
+
+def test_session_load_partial_deprioritises_but_keeps_positive_score() -> None:
+    # A partial load (2.0 → multiplier 0.5) deprioritises busy below free,
+    # yet busy keeps a positive drain score (not zeroed like the saturated case).
+    from claude_rotate.selection import _drain_urgency_score
+
+    free = replace(_cand(h5=10.0, w7=10.0), account=_acc(name="free"))
+    busy = replace(_cand(h5=10.0, w7=10.0), account=_acc(name="busy"), session_load=2.0)
+    assert _drain_urgency_score(busy) > 0.0
+    assert _drain_urgency_score(busy) < _drain_urgency_score(free)
+    best, wait = pick_best([busy, free], now=FIXED_NOW)
+    assert wait is None
+    assert best.account.name == "free"
+
+
+def test_loaded_account_still_picked_when_sole_usable() -> None:
+    # Heavy load (drain score 0.0) must NOT make an account unpickable when it
+    # is the only usable candidate — the dampener only deprioritises.
+    only = replace(_cand(h5=10.0, w7=10.0), account=_acc(name="only"), session_load=99.0)
+    best, wait = pick_best([only], now=FIXED_NOW)
+    assert wait is None
+    assert best.account.name == "only"
