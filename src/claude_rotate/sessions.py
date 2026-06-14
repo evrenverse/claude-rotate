@@ -47,7 +47,7 @@ class SessionRecord:
         return cls(
             uuid=str(raw["uuid"]),
             account=str(raw["account"]),
-            pid=int(raw["pid"]),  # type: ignore[arg-type]
+            pid=int(raw["pid"]),  # type: ignore[call-overload]
             start_time=float(raw["start_time"]),  # type: ignore[arg-type]
             started_at=float(raw["started_at"]),  # type: ignore[arg-type]
             last_active=float(raw["last_active"]),  # type: ignore[arg-type]
