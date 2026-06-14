@@ -18,6 +18,7 @@ from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     HEADROOM_PERCENT,
     PACE_MIN_ELAPSED_SECONDS,
+    SESSION_LOAD_PENALTY,
     SOON_QUOTA_CEILING_PERCENT,
 )
 
@@ -41,6 +42,10 @@ class Candidate:
     # Opus 7d bucket from the OAuth usage endpoint; None when only the
     # inference rate-limit headers were available.
     w7_opus_pct: float | None = None
+    # Weighted live-session load on this account (active + idle*idle_weight),
+    # injected by run.py from the session registry. Bridges the probe's blind
+    # window so a burst fans out instead of stampeding one account.
+    session_load: float = 0.0
 
     def subscription_expiry_seconds(self, now: datetime | None = None) -> int | None:
         # effective_expires_at: manual override wins over API-derived
@@ -60,6 +65,7 @@ def candidate_from_account(
     w7_reset_secs: int,
     probe_error: str = "",
     w7_opus_pct: float | None = None,
+    session_load: float = 0.0,
 ) -> Candidate:
     return Candidate(
         account=account,
@@ -69,6 +75,7 @@ def candidate_from_account(
         w7_reset_secs=w7_reset_secs,
         probe_error=probe_error,
         w7_opus_pct=w7_opus_pct,
+        session_load=session_load,
     )
 
 
@@ -222,8 +229,23 @@ def _opus_availability(c: Candidate) -> float:
     return max(0.0, HEADROOM_PERCENT - c.w7_opus_pct) / 100.0
 
 
+def _session_load_availability(c: Candidate) -> float:
+    """Dampener shrinking with the account's recent live-session load.
+
+    Bounded to [0, 1]; never makes an account unusable (is_usable ignores it),
+    so a loaded account is only deprioritised. Yields to observed usage: once
+    real burn lands in h5_pct, h5_availability compounds with this factor.
+    """
+    return max(0.0, 1.0 - c.session_load * SESSION_LOAD_PENALTY)
+
+
 def _drain_urgency_score(c: Candidate) -> float:
-    return _weekly_urgency(c) * _h5_availability(c) * _opus_availability(c)
+    return (
+        _weekly_urgency(c)
+        * _h5_availability(c)
+        * _opus_availability(c)
+        * _session_load_availability(c)
+    )
 
 
 def _pick_tier3(usable: list[Candidate]) -> Candidate:
