@@ -592,6 +592,40 @@ def test_render_cards_mode_shows_error_status() -> None:
     assert "token invalid" in out
 
 
+def test_render_narrow_terminal_draws_bordered_table() -> None:
+    # Phone-width: the compact view is a single-column bordered table with a
+    # rule between accounts — the same chrome as the wide table, not the old
+    # borderless cards.
+    rows = [_row(_acc("a")), _row(_acc("b"))]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=60)
+    render_dashboard(rows, chosen="a", console=console)
+    out = console.file.getvalue()
+    assert "│" in out  # vertical rules
+    assert "─" in out  # horizontal rules
+    assert "├" in out  # a rule separates the two account cards
+    # The stacked layout still carries the per-window labels and plan badge.
+    assert "a · Max-20" in out
+    assert "5h" in out
+    assert "week" in out
+
+
+def test_render_narrow_greys_unusable_but_keeps_status_loud() -> None:
+    # ANSI capture at phone width: an exhausted account flattens to grey inside
+    # its bordered cell, while a relogin account keeps its loud RELOGIN label.
+    rows = [
+        _row(_acc("dead"), h5_pct=102.0, w7_pct=25.0),
+        _row(_acc("stale"), h5_pct=None, w7_pct=None, status="relogin", note="token invalid"),
+    ]
+    console = Console(file=StringIO(), force_terminal=True, color_system="truecolor", width=60)
+    render_dashboard(rows, chosen=None, console=console)
+    out = console.file.getvalue()
+    lines = [ln for ln in out.splitlines() if "│" in ln]
+    dead_line = next(ln for ln in lines if "dead" in ln)
+    assert "38;2;" not in dead_line  # gradient colours stripped on the unusable card
+    assert "38;5;240" in dead_line  # grey35 applied
+    assert "RELOGIN" in out  # error label stays coloured/loud
+
+
 def test_render_no_risk_footer_when_healthy() -> None:
     rows = [_row(_acc("main"), h5_pct=10.0, w7_pct=20.0)]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
