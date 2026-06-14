@@ -148,3 +148,32 @@ def reap(paths: Paths, *, liveness: Liveness = is_alive) -> None:
     for rec in read_records(paths):
         if not liveness(rec.pid, rec.start_time):
             remove_record(paths, rec.uuid)
+
+
+def count_load(
+    paths: Paths,
+    *,
+    now: float,
+    active_window: float,
+    liveness: Liveness = is_alive,
+) -> dict[str, SessionLoad]:
+    """Per-account live-session load. Reaps dead records as a side effect.
+
+    A record is *active* when its ``last_active`` is younger than
+    ``active_window`` (freshly launched sessions qualify because last_active is
+    initialised to started_at), otherwise *idle*. Accounts with no live session
+    are absent from the result.
+    """
+    active: dict[str, int] = {}
+    idle: dict[str, int] = {}
+    for rec in read_records(paths):
+        if not liveness(rec.pid, rec.start_time):
+            remove_record(paths, rec.uuid)
+            continue
+        bucket = active if (now - rec.last_active) < active_window else idle
+        bucket[rec.account] = bucket.get(rec.account, 0) + 1
+    names = set(active) | set(idle)
+    return {
+        name: SessionLoad(active=active.get(name, 0), idle=idle.get(name, 0))
+        for name in names
+    }
