@@ -58,9 +58,7 @@ def test_session_paths_and_constants() -> None:
         Paths,
     )
 
-    p = Paths(
-        config_dir=Path("/c"), cache_dir=Path("/ca"), state_dir=Path("/s")
-    )
+    p = Paths(config_dir=Path("/c"), cache_dir=Path("/ca"), state_dir=Path("/s"))
     assert p.sessions_dir == Path("/s/sessions")
     assert p.sessions_lock == Path("/s/sessions.lock")
     assert SESSION_ACTIVE_WINDOW_SECONDS == 90

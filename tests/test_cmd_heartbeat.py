@@ -8,9 +8,7 @@ from claude_rotate.config import Paths
 
 
 def _paths(tmp_path: Path) -> Paths:
-    return Paths(
-        config_dir=tmp_path / "c", cache_dir=tmp_path / "ca", state_dir=tmp_path / "s"
-    )
+    return Paths(config_dir=tmp_path / "c", cache_dir=tmp_path / "ca", state_dir=tmp_path / "s")
 
 
 def test_heartbeat_active_touches_record(tmp_path, monkeypatch) -> None:
