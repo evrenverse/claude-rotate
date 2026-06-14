@@ -244,3 +244,105 @@ def test_run_all_disabled_refuses(tmp_path, capsys) -> None:
     assert "disabled" in capsys.readouterr().err.lower()
     mock_exec.assert_not_called()
     mock_probe.assert_not_called()  # short-circuits before probing
+
+
+def test_run_reserves_session_and_passes_uuid(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    p.state_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    with (
+        patch(
+            "claude_rotate.commands.run.probe_many",
+            return_value=[
+                Candidate(
+                    account=_acc(),
+                    h5_pct=10.0,
+                    w7_pct=10.0,
+                    h5_reset_secs=3600,
+                    w7_reset_secs=86400,
+                )
+            ],
+        ),
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.ensure_fresh", side_effect=lambda a, _p: a),
+        patch("claude_rotate.commands.run.exec_claude") as mock_exec,
+    ):
+        execute(p, [])
+
+    # A reservation record was written for the chosen account…
+    recs = sessions.read_records(p)
+    assert len(recs) == 1
+    assert recs[0].account == "main"
+    # …and exec_claude received that record's uuid.
+    assert mock_exec.call_args.kwargs["session_uuid"] == recs[0].uuid
+
+
+def test_run_burst_fans_out_across_accounts(tmp_path) -> None:
+    """Second run sees the first's reservation and avoids that account."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    p.state_dir.mkdir(parents=True)
+    Store(p).save({"a": _acc("a"), "b": _acc("b")})
+
+    def two_equal(_pool):
+        return [
+            Candidate(
+                account=_acc("a"), h5_pct=10.0, w7_pct=10.0, h5_reset_secs=3600, w7_reset_secs=86400
+            ),
+            Candidate(
+                account=_acc("b"), h5_pct=10.0, w7_pct=10.0, h5_reset_secs=3600, w7_reset_secs=86400
+            ),
+        ]
+
+    chosen: list[str] = []
+    with (
+        patch("claude_rotate.commands.run.probe_many", side_effect=two_equal),
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.ensure_fresh", side_effect=lambda a, _p: a),
+        patch(
+            "claude_rotate.commands.run.exec_claude",
+            side_effect=lambda acc, _p, _a, session_uuid=None: chosen.append(acc.name) or 0,
+        ),
+    ):
+        execute(p, [])
+        execute(p, [])
+
+    assert set(chosen) == {"a", "b"}  # fanned out, not the same account twice
+
+
+def test_run_fallback_tracks_session_when_no_probe_data(tmp_path) -> None:
+    """The all-probes-failed fallback still reserves + injects a uuid."""
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    p.state_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    with (
+        patch(
+            "claude_rotate.commands.run.probe_many",
+            return_value=[
+                Candidate(
+                    account=_acc(),
+                    h5_pct=None,
+                    w7_pct=None,
+                    h5_reset_secs=0,
+                    w7_reset_secs=0,
+                    probe_error="network",
+                )
+            ],
+        ),
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.ensure_fresh", side_effect=lambda a, _p: a),
+        patch("claude_rotate.commands.run.exec_claude") as mock_exec,
+    ):
+        execute(p, [])
+
+    recs = sessions.read_records(p)
+    assert len(recs) == 1 and recs[0].account == "main"
+    assert mock_exec.call_args.kwargs["session_uuid"] == recs[0].uuid
