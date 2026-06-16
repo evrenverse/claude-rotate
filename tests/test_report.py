@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from claude_rotate.accounts import Account
 from claude_rotate.dashboard import DashboardRow
@@ -274,6 +274,64 @@ def test_fenced_toggle() -> None:
 def test_status_line_no_active_session() -> None:
     report = build_report(_sample(), chosen="grace", active=None, now=NOW)
     assert "No active session recorded; next launch would pick 'grace' (>)." in report
+
+
+def test_report_caps_forecast_horizon_at_expiry() -> None:
+    # weekly reset ~5.7d out, sub expires 2d out -> forecast capped to ~93% + ⌛.
+    row = _row(
+        "matri",
+        h5=10.0,
+        w7=37.0,
+        h5_reset=4 * _HOUR,
+        w7_reset=492480,  # 5.7d
+        expires=NOW + timedelta(days=2),
+    )
+    report = build_report([row], chosen="matri", active="matri", now=NOW)
+    assert "→93%" in report
+    assert "⌛" in report
+    # The ⌛ trails the relative-duration at the very end of the week fact line,
+    # i.e. it is appended outside the right-justified clock column (a regression
+    # that re-bakes the glyph into the clock would not end the line with ⌛).
+    block = next(b for b in _blocks(report) if "matri" in b[0])
+    week_fact = next(ln for ln in block if ln.lstrip().startswith("week"))
+    assert week_fact.rstrip().endswith("⌛")
+
+
+def test_report_does_not_cap_when_expiry_after_reset() -> None:
+    # Sub expires 10d out, weekly reset ~5.7d out -> no cap, no ⌛ marker.
+    row = _row(
+        "matri",
+        h5=10.0,
+        w7=37.0,
+        h5_reset=4 * _HOUR,
+        w7_reset=492480,  # 5.7d
+        expires=NOW + timedelta(days=10),
+    )
+    report = build_report([row], chosen="matri", active="matri", now=NOW)
+    assert "⌛" not in report
+
+
+def test_report_cap_keeps_clock_columns_aligned() -> None:
+    # Capped on the weekly window (5.7d > 2d expiry) but NOT on 5h (reset sooner
+    # than expiry): the ⌛ trails outside the grid, so both fact lines' clock
+    # columns must still line up.
+    row = _row(
+        "matri",
+        h5=20.0,
+        w7=37.0,
+        h5_reset=4 * _HOUR,
+        w7_reset=492480,  # 5.7d
+        expires=NOW + timedelta(days=2),
+    )
+    report = build_report([row], chosen="matri", active="matri", now=NOW)
+    block = next(b for b in _blocks(report) if "matri" in b[0])
+    h5_fact = next(ln for ln in block if ln.lstrip().startswith("5h"))
+    week_fact = next(ln for ln in block if ln.lstrip().startswith("week"))
+    # Only the week fact line is capped; its clock column starts at the same
+    # offset as the (uncapped) 5h clock column.
+    assert ":" in h5_fact and ":" in week_fact
+    assert h5_fact.index(":") == week_fact.index(":")
+    assert "⌛" not in h5_fact
 
 
 def test_report_shows_session_indicator() -> None:

@@ -44,6 +44,7 @@ from claude_rotate.insights import (
     compute_forecast,
     compute_limit_eta,
     days_left,
+    expiry_horizon,
     pct_str,
     rel_duration,
     status_line,
@@ -69,6 +70,7 @@ class _Cell(NamedTuple):
     forecast: str | None
     eta_clock: str | None
     eta_rel: str | None
+    capped: bool = False
 
 
 def _render_cards(
@@ -126,17 +128,28 @@ def _render_cards(
         # Show a weekday on every clock as soon as any dated reset lands on another
         # day. A limit ETA is always earlier than its own reset, so if every reset
         # is today every ETA is too — the resets alone decide the shared slot.
+        # When the subscription expires before a window resets, use the horizon
+        # (expiry offset) instead of the full reset offset for the weekday check.
+        def _lands_on_other_day(secs: int) -> bool:
+            return (now + timedelta(seconds=max(secs, 0))).date() != now.date()
+
         show_weekday = any(
-            pct is not None and (now + timedelta(seconds=max(secs, 0))).date() != now.date()
+            pct is not None
+            and _lands_on_other_day(
+                expiry_horizon(row.account.effective_expires_at, secs, now_utc) or secs
+            )
             for _, pct, secs, _ in specs
         )
 
         cells: list[_Cell] = []
         for label, pct, secs, window in specs:
-            forecast = compute_forecast(pct, secs, window)
+            horizon_arg = expiry_horizon(row.account.effective_expires_at, secs, now_utc)
+            capped = horizon_arg is not None
+            forecast = compute_forecast(pct, secs, window, horizon_arg)
             if pct is not None:
-                reset_clk = clock_at(now, secs, show_weekday=show_weekday)
-                reset_rel = rel_duration(secs)
+                hz = horizon_arg if capped else secs
+                reset_clk = clock_at(now, hz, show_weekday=show_weekday)
+                reset_rel = rel_duration(hz)
             else:
                 reset_clk, reset_rel = "—", ""
             if pct is not None and pct >= 100:
@@ -145,7 +158,7 @@ def _render_cards(
                 special, fc_str, eta_clk, eta_rel = "—", None, None, None
             else:
                 special, fc_str = None, f"→{forecast}%"
-                eta = compute_limit_eta(pct, secs, window)
+                eta = compute_limit_eta(pct, secs, window, horizon_arg)
                 if eta is not None:
                     eta_clk = clock_at(now, eta, show_weekday=show_weekday)
                     eta_rel = rel_duration(eta)
@@ -162,6 +175,7 @@ def _render_cards(
                     fc_str,
                     eta_clk,
                     eta_rel,
+                    capped,
                 )
             )
 
@@ -173,6 +187,10 @@ def _render_cards(
         rows_txt = [head]
         for c in cells:
             fact_tail = f"{c.reset_clock:>{cw}} {c.reset_rel:>{rw}}".rstrip()
+            if c.capped:
+                # Append after the right-justified clock/rel field so the wide ⌛
+                # glyph stays outside the column grid and keeps the cards aligned.
+                fact_tail += " ⌛"
             fact = f"{c.label:<{label_width}}  {_bar(c.pct)}  {c.pct_str:>{pw}}  {fact_tail}"
             rows_txt.append(fact.rstrip())
             if c.special is not None:
