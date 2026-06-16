@@ -159,6 +159,41 @@ def test_tier1_skips_exhausted_accounts() -> None:
     assert chosen.account is healthy.account
 
 
+def test_tier1_skips_expiring_account_walling_its_5h() -> None:
+    # Urgent (2d) but 5h near the wall (80%) -> capacity 0.20 < 0.5 -> loses the
+    # expiry shortcut; a healthy non-expiring account is picked instead.
+    walling = _cand(plan="max_20x", expires_days=2, h5=80.0, w7=10.0)
+    healthy = _cand(plan="max_20x", expires_days=None, h5=5.0, w7=5.0)
+    best, _ = pick_best([walling, healthy], now=FIXED_NOW)
+    assert best is healthy
+
+
+def test_tier1_skips_expiring_account_under_heavy_session_load() -> None:
+    # The screenshot case: urgent (2d), 5h fine (10%) but 8 idle sessions
+    # (weighted 2.4 -> load avail 0.40 -> capacity 0.90*0.40 = 0.36 < 0.5).
+    loaded = replace(_cand(plan="max_20x", expires_days=2, h5=10.0, w7=10.0), session_load=2.4)
+    fresh = _cand(plan="max_20x", expires_days=None, h5=2.0, w7=2.0)
+    best, _ = pick_best([loaded, fresh], now=FIXED_NOW)
+    assert best is fresh
+
+
+def test_tier1_still_picks_expiring_account_with_capacity() -> None:
+    # Regression: urgent (2d), fresh 5h, no load -> capacity ~0.90 >= 0.5 ->
+    # expiry priority preserved exactly as before.
+    urgent = _cand(plan="max_20x", expires_days=2, h5=10.0, w7=10.0)
+    normal = _cand(plan="max_20x", expires_days=None, h5=5.0, w7=5.0)
+    best, _ = pick_best([urgent, normal], now=FIXED_NOW)
+    assert best is urgent
+
+
+def test_tier1_gated_account_still_picked_when_only_usable() -> None:
+    # Gate never makes an account unpickable: a walling, expiring, sole-usable
+    # account is still chosen (via Tier-3, which has only this candidate).
+    walling = _cand(plan="max_20x", expires_days=2, h5=80.0, w7=10.0)
+    best, _ = pick_best([walling], now=FIXED_NOW)
+    assert best is walling
+
+
 def test_tier2_balance_picks_lower_weekly_when_spread_exceeds_threshold() -> None:
     high = _cand(plan="max_20x", w7=80.0, h5=10.0)
     low = _cand(plan="max_20x", w7=20.0, h5=10.0)

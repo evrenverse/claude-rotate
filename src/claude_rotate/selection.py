@@ -313,6 +313,12 @@ def _pick_tier1(usable: list[Candidate], now: datetime) -> Candidate | None:
         secs = c.subscription_expiry_seconds(now)
         if secs is not None and 0 < secs <= EXPIRY_URGENT_DAYS * 86400:
             urgent.append(c)
+    # Capacity gate: keep the expiry shortcut only for accounts that can still host
+    # another session now. A loaded/walling expiring account is dropped here and
+    # falls through to the load/pace-aware tiers, so the current session spills
+    # elsewhere instead of stampeding it (its weekly quota still drains across its
+    # later 5h windows).
+    urgent = [c for c in urgent if _capacity_availability(c) >= CAPACITY_GATE_THRESHOLD]
     if not urgent:
         return None
     urgent.sort(
