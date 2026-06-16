@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.text import Text
 
 from claude_rotate.accounts import Account
+from claude_rotate.config import FORECAST_WINDOW_7D_SECONDS
 from claude_rotate.dashboard import (
     DashboardRow,
     compute_forecast,
@@ -14,6 +15,7 @@ from claude_rotate.dashboard import (
     gradient_bar,
     render_dashboard,
 )
+from claude_rotate.insights import expiry_horizon, seconds_until
 
 
 def test_gradient_bar_produces_text_instance() -> None:
@@ -809,3 +811,53 @@ def test_status_json_includes_sessions() -> None:
     )
     out = status_json([row], chosen="matri", active=None)
     assert out["accounts"][0]["sessions"] == {"active": 2, "idle": 1}
+
+
+# ---------------------------------------------------------------------------
+# Expiry horizon: seconds_until, expiry_horizon, horizon_secs cap
+# ---------------------------------------------------------------------------
+
+
+def test_compute_forecast_horizon_none_equals_uncapped() -> None:
+    # weekly: 37% used, reset 5.7d out (elapsed 1.3d) -> projects to 199% by reset
+    reset = 492480  # 5.7d
+    assert compute_forecast(37.0, reset, FORECAST_WINDOW_7D_SECONDS) == 199
+    assert compute_forecast(37.0, reset, FORECAST_WINDOW_7D_SECONDS, None) == 199
+
+
+def test_compute_forecast_caps_projection_at_expiry_horizon() -> None:
+    # Same window, but the sub dies in 2d (< the 5.7d reset) -> project to 2d.
+    reset = 492480
+    assert compute_forecast(37.0, reset, FORECAST_WINDOW_7D_SECONDS, 172800) == 93
+
+
+def test_compute_forecast_horizon_at_or_after_reset_is_unchanged() -> None:
+    reset = 492480
+    assert compute_forecast(37.0, reset, FORECAST_WINDOW_7D_SECONDS, 999999) == 199
+
+
+def test_compute_limit_eta_returns_none_when_account_dies_before_wall() -> None:
+    # Hits 100% at ~191247s (~2.2d), but the sub dies at 2d -> no wall in its life.
+    reset = 492480
+    assert compute_limit_eta(37.0, reset, FORECAST_WINDOW_7D_SECONDS) == 191247
+    assert compute_limit_eta(37.0, reset, FORECAST_WINDOW_7D_SECONDS, 172800) is None
+
+
+def test_expiry_horizon_caps_only_when_sub_dies_before_reset() -> None:
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    soon = now + timedelta(days=2)
+    late = now + timedelta(days=30)
+    assert expiry_horizon(soon, 492480, now) == 172800   # 2d < 5.7d reset -> cap
+    assert expiry_horizon(late, 492480, now) is None      # outlives reset -> no cap
+    assert expiry_horizon(None, 492480, now) is None      # no expiry -> no cap
+    # expires exactly now -> clamped 0 -> no cap
+    assert expiry_horizon(now, 492480, now) is None
+    # expiry == reset -> no cap
+    assert expiry_horizon(now + timedelta(seconds=492480), 492480, now) is None
+
+
+def test_seconds_until_clamps_and_handles_none() -> None:
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    assert seconds_until(now + timedelta(hours=1), now) == 3600
+    assert seconds_until(now - timedelta(hours=1), now) == 0  # clamped >= 0
+    assert seconds_until(None, now) is None
