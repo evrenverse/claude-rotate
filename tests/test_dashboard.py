@@ -17,6 +17,7 @@ from claude_rotate.dashboard import (
     compute_limit_eta,
     gradient_bar,
     render_dashboard,
+    status_json,
 )
 from claude_rotate.insights import expiry_horizon, seconds_until
 
@@ -913,3 +914,22 @@ def test_window_text_non_capped_clock_has_no_hourglass() -> None:
     )
     txt = _window_text(cell, bar_w=10, pw=4, cw=5, rw=8)
     assert "⌛" not in txt.plain
+
+
+# ---------------------------------------------------------------------------
+# status_json: expiry-capped forecasts
+# ---------------------------------------------------------------------------
+
+
+def test_status_json_forecast_is_expiry_capped() -> None:
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    acc = _acc("matri", sub_days=2)
+    row = _row(acc, w7_pct=37.0, w7_secs=492480)
+    data = status_json([row], chosen="matri", active="matri", now=now)
+    assert data["accounts"][0]["w7_forecast_pct"] == 93  # capped to the 2d expiry
+
+    # Companion: an account whose sub outlives the weekly reset is NOT capped.
+    acc_late = _acc("spir", sub_days=26)
+    row_late = _row(acc_late, w7_pct=37.0, w7_secs=492480)
+    data_late = status_json([row_late], chosen="spir", active="spir", now=now)
+    assert data_late["accounts"][0]["w7_forecast_pct"] == 199
