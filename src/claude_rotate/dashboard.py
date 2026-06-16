@@ -38,6 +38,7 @@ from claude_rotate.insights import (
     clock_at,
     compute_forecast,
     compute_limit_eta,
+    expiry_horizon,
     plan_label,
     rel_duration,
     status_line,
@@ -271,6 +272,7 @@ class _WindowCell:
     eta_secs: int | None
     eta_clock: str
     eta_rel: str
+    capped: bool = False
 
 
 _NA_CELL = _WindowCell(None, "N/A", "", "", None, "", None, "", "")
@@ -285,11 +287,12 @@ def _window_cells(
     show_forecast: bool,
 ) -> list[_WindowCell]:
     """Build one column of cells; the weekday slot is shared per column."""
-    datas: list[tuple[float | None, int, bool]] = []
+    datas: list[tuple[float | None, int, bool, int | None]] = []
     for r in rows:
         pct = r.h5_pct if window == "5h" else r.w7_pct
         secs = r.h5_reset_secs if window == "5h" else r.w7_reset_secs
-        datas.append((pct if r.status == "ok" else None, secs, r.from_cache))
+        horizon_arg = expiry_horizon(r.account.effective_expires_at, secs, now_local)
+        datas.append((pct if r.status == "ok" else None, secs, r.from_cache, horizon_arg))
 
     def lands_on_other_day(secs: int) -> bool:
         return (now_local + timedelta(seconds=max(secs, 0))).date() != now_local.date()
@@ -297,30 +300,32 @@ def _window_cells(
     show_weekday = any(
         pct is not None
         and (
-            lands_on_other_day(secs)
+            lands_on_other_day(horizon_arg if horizon_arg is not None else secs)
             or (
                 show_forecast
-                and (eta := compute_limit_eta(pct, secs, window_secs)) is not None
+                and (eta := compute_limit_eta(pct, secs, window_secs, horizon_arg)) is not None
                 and lands_on_other_day(eta)
             )
         )
-        for pct, secs, _ in datas
+        for pct, secs, _, horizon_arg in datas
     )
 
     cells: list[_WindowCell] = []
-    for pct, secs, from_cache in datas:
+    for pct, secs, from_cache, horizon_arg in datas:
         if pct is None:
             cells.append(_NA_CELL)
             continue
-        forecast = compute_forecast(pct, secs, window_secs) if show_forecast else None
-        eta = compute_limit_eta(pct, secs, window_secs) if show_forecast else None
+        capped = horizon_arg is not None
+        horizon = horizon_arg if capped else secs
+        forecast = compute_forecast(pct, secs, window_secs, horizon_arg) if show_forecast else None
+        eta = compute_limit_eta(pct, secs, window_secs, horizon_arg) if show_forecast else None
         prefix = "~" if from_cache else ""
         cells.append(
             _WindowCell(
                 pct=pct,
                 pct_str=f"{prefix}{pct:g}%",
-                clock=clock_at(now_local, secs, show_weekday=show_weekday),
-                rel=rel_duration(secs),
+                clock=clock_at(now_local, horizon, show_weekday=show_weekday),
+                rel=rel_duration(horizon),
                 forecast=forecast,
                 fc_str=f"→{forecast}%" if forecast is not None else "",
                 eta_secs=eta,
@@ -328,6 +333,7 @@ def _window_cells(
                     clock_at(now_local, eta, show_weekday=show_weekday) if eta is not None else ""
                 ),
                 eta_rel=rel_duration(eta) if eta is not None else "",
+                capped=capped,
             )
         )
     return cells
@@ -355,10 +361,14 @@ def _window_text(c: _WindowCell, *, bar_w: int, pw: int, cw: int, rw: int, label
     t.append("  ")
     t.append(f"{c.pct_str:>{pw}}", style=_pct_color(c.pct, width=bar_w))
     if cw and c.clock:
-        t.append(f"  {c.clock:>{cw}}")
+        t.append("  ")
+        t.append(f"{c.clock:>{cw}}", style="dim" if c.capped else "")
         if rw and c.rel:
             t.append(" ")
             t.append(f"{c.rel:>{rw}}", style="dim")
+        if c.capped:
+            # The clock shows the subscription expiry, not the window reset.
+            t.append(" ⌛", style="dim")
     if not (c.fc_str or c.eta_clock):
         return t
     t.append("\n")

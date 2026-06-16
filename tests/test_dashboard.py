@@ -10,6 +10,9 @@ from claude_rotate.accounts import Account
 from claude_rotate.config import FORECAST_WINDOW_7D_SECONDS
 from claude_rotate.dashboard import (
     DashboardRow,
+    _window_cells,
+    _window_text,
+    _WindowCell,
     compute_forecast,
     compute_limit_eta,
     gradient_bar,
@@ -861,3 +864,52 @@ def test_seconds_until_clamps_and_handles_none() -> None:
     assert seconds_until(now + timedelta(hours=1), now) == 3600
     assert seconds_until(now - timedelta(hours=1), now) == 0  # clamped >= 0
     assert seconds_until(None, now) is None
+
+
+# ---------------------------------------------------------------------------
+# Subscription expiry cap in _window_cells / _window_text
+# ---------------------------------------------------------------------------
+
+
+def test_window_cells_caps_forecast_and_clock_at_expiry() -> None:
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    acc = _acc("matri", sub_days=2)             # expires 2d after `now`
+    row = _row(acc, w7_pct=37.0, w7_secs=492480)  # weekly reset ~5.7d
+    cell = _window_cells(
+        [row], "week", FORECAST_WINDOW_7D_SECONDS, now_local=now, show_forecast=True
+    )[0]
+    assert cell.capped is True
+    assert cell.forecast == 93        # projected to the 2d expiry, not the 5.7d reset
+    assert cell.eta_clock == ""       # dies before 100% -> no wall ETA
+    assert "2d" in cell.rel           # clock/rel show the expiry horizon
+
+
+def test_window_cells_no_cap_when_expiry_after_reset() -> None:
+    now = datetime(2026, 4, 22, tzinfo=UTC)
+    acc = _acc("spir", sub_days=26)
+    row = _row(acc, w7_pct=37.0, w7_secs=492480)
+    cell = _window_cells(
+        [row], "week", FORECAST_WINDOW_7D_SECONDS, now_local=now, show_forecast=True
+    )[0]
+    assert cell.capped is False
+    assert cell.forecast == 199       # unchanged projection to the real reset
+
+
+def test_window_text_marks_capped_clock_with_hourglass() -> None:
+    cell = _WindowCell(
+        pct=37.0, pct_str="37%", clock="Thu 14:00", rel="(2d 0h)",
+        forecast=93, fc_str="→93%", eta_secs=None, eta_clock="", eta_rel="",
+        capped=True,
+    )
+    txt = _window_text(cell, bar_w=10, pw=4, cw=9, rw=8)
+    assert "⌛" in txt.plain
+
+
+def test_window_text_non_capped_clock_has_no_hourglass() -> None:
+    cell = _WindowCell(
+        pct=37.0, pct_str="37%", clock="14:00", rel="(2h 0m)",
+        forecast=199, fc_str="→199%", eta_secs=None, eta_clock="", eta_rel="",
+        capped=False,
+    )
+    txt = _window_text(cell, bar_w=10, pw=4, cw=5, rw=8)
+    assert "⌛" not in txt.plain
