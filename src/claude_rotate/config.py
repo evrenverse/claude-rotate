@@ -47,6 +47,13 @@ SESSION_IDLE_WEIGHT = 0.3
 # Strength of the per-load-unit penalty in the tier-3 drain score
 # (session_load_availability = max(0, 1 - weighted_load * penalty)).
 SESSION_LOAD_PENALTY = 0.25
+# Expiry-tier capacity gate — a soon-expiring account keeps its expiry-priority
+# shortcut (Tier-1 / Tier-2 soon-exception) only while it can still host another
+# session in the current 5h window. Below this share of a fresh account's capacity
+# the shortcut is skipped for that pick and the load/pace-aware Tier-3 decides
+# instead. Never makes the account unpickable. Tunable; the sole knob for how
+# eagerly draining yields to load-spreading.
+CAPACITY_GATE_THRESHOLD = 0.5
 
 # Forecast windows — used by the status dashboard's [→XX%] projection to
 # derive elapsed time from seconds-until-reset. Same lengths the Bash

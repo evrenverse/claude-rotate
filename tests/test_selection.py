@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from claude_rotate.accounts import Account
 from claude_rotate.selection import (
     Candidate,
+    _capacity_availability,
     is_usable,
     next_available_seconds,
     pick_best,
@@ -399,3 +400,17 @@ def test_loaded_account_still_picked_when_sole_usable() -> None:
     best, wait = pick_best([only], now=FIXED_NOW)
     assert wait is None
     assert best.account.name == "only"
+
+
+def test_capacity_availability_is_product_of_h5_and_load() -> None:
+    # h5 at 80% with 3600s left -> level=(100-80)/100=0.20; pace=1.0 (rate exactly fills remaining budget)
+    # session_load 2.4 -> _session_load_availability = 1 - 2.4*0.25 = 0.40
+    c = replace(_cand(h5=80.0, w7=10.0), session_load=2.4)
+    assert _capacity_availability(c) == 0.20 * 0.40
+
+
+def test_capacity_availability_is_one_without_data() -> None:
+    # No h5 usage and no session load -> both dampeners 1.0
+    # session_load defaults to 0.0 on Candidate -> load dampener also 1.0
+    c = _cand(h5=None, w7=10.0)
+    assert _capacity_availability(c) == 1.0
