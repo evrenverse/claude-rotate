@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from claude_rotate.accounts import Account
 from claude_rotate.config import (
     BALANCE_THRESHOLD_PERCENT,
+    CAPACITY_GATE_THRESHOLD,
     EXPIRY_SOON_DAYS,
     EXPIRY_URGENT_DAYS,
     FORECAST_WINDOW_5H_SECONDS,
@@ -237,6 +238,18 @@ def _session_load_availability(c: Candidate) -> float:
     real burn lands in h5_pct, h5_availability compounds with this factor.
     """
     return max(0.0, 1.0 - c.session_load * SESSION_LOAD_PENALTY)
+
+
+def _capacity_availability(c: Candidate) -> float:
+    """Combined capacity dampener in [0, 1]: 5h-window availability × live-session load signal.
+
+    Product of the two dampeners that answer "is there room right now": the 5h wall
+    (`_h5_availability` — level and burn-pace) and the live-session stampede signal
+    (`_session_load_availability`). Deliberately excludes `_weekly_urgency` (the *reason*
+    to drain, not a capacity signal) and `_opus_availability` (a soft degradation, not a
+    hard wall). 1.0 when no usage/session data is known.
+    """
+    return _h5_availability(c) * _session_load_availability(c)
 
 
 def _drain_urgency_score(c: Candidate) -> float:
