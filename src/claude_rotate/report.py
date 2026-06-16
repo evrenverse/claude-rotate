@@ -125,6 +125,7 @@ def _render_cards(
             ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS),
             ("week", row.w7_pct, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS),
         )
+
         # Show a weekday on every clock as soon as any dated reset lands on another
         # day. A limit ETA is always earlier than its own reset, so if every reset
         # is today every ETA is too — the resets alone decide the shared slot.
@@ -147,7 +148,7 @@ def _render_cards(
             capped = horizon_arg is not None
             forecast = compute_forecast(pct, secs, window, horizon_arg)
             if pct is not None:
-                hz = horizon_arg if capped else secs
+                hz = horizon_arg if horizon_arg is not None else secs
                 reset_clk = clock_at(now, hz, show_weekday=show_weekday)
                 reset_rel = rel_duration(hz)
             else:

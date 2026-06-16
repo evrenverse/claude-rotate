@@ -851,9 +851,9 @@ def test_expiry_horizon_caps_only_when_sub_dies_before_reset() -> None:
     now = datetime(2026, 4, 22, tzinfo=UTC)
     soon = now + timedelta(days=2)
     late = now + timedelta(days=30)
-    assert expiry_horizon(soon, 492480, now) == 172800   # 2d < 5.7d reset -> cap
-    assert expiry_horizon(late, 492480, now) is None      # outlives reset -> no cap
-    assert expiry_horizon(None, 492480, now) is None      # no expiry -> no cap
+    assert expiry_horizon(soon, 492480, now) == 172800  # 2d < 5.7d reset -> cap
+    assert expiry_horizon(late, 492480, now) is None  # outlives reset -> no cap
+    assert expiry_horizon(None, 492480, now) is None  # no expiry -> no cap
     # expires exactly now -> clamped 0 -> no cap
     assert expiry_horizon(now, 492480, now) is None
     # expiry == reset -> no cap
@@ -874,15 +874,15 @@ def test_seconds_until_clamps_and_handles_none() -> None:
 
 def test_window_cells_caps_forecast_and_clock_at_expiry() -> None:
     now = datetime(2026, 4, 22, tzinfo=UTC)
-    acc = _acc("matri", sub_days=2)             # expires 2d after `now`
+    acc = _acc("matri", sub_days=2)  # expires 2d after `now`
     row = _row(acc, w7_pct=37.0, w7_secs=492480)  # weekly reset ~5.7d
     cell = _window_cells(
         [row], "week", FORECAST_WINDOW_7D_SECONDS, now_local=now, show_forecast=True
     )[0]
     assert cell.capped is True
-    assert cell.forecast == 93        # projected to the 2d expiry, not the 5.7d reset
-    assert cell.eta_clock == ""       # dies before 100% -> no wall ETA
-    assert "2d" in cell.rel           # clock/rel show the expiry horizon
+    assert cell.forecast == 93  # projected to the 2d expiry, not the 5.7d reset
+    assert cell.eta_clock == ""  # dies before 100% -> no wall ETA
+    assert "2d" in cell.rel  # clock/rel show the expiry horizon
 
 
 def test_window_cells_no_cap_when_expiry_after_reset() -> None:
@@ -893,13 +893,20 @@ def test_window_cells_no_cap_when_expiry_after_reset() -> None:
         [row], "week", FORECAST_WINDOW_7D_SECONDS, now_local=now, show_forecast=True
     )[0]
     assert cell.capped is False
-    assert cell.forecast == 199       # unchanged projection to the real reset
+    assert cell.forecast == 199  # unchanged projection to the real reset
 
 
 def test_window_text_marks_capped_clock_with_hourglass() -> None:
     cell = _WindowCell(
-        pct=37.0, pct_str="37%", clock="Thu 14:00", rel="(2d 0h)",
-        forecast=93, fc_str="→93%", eta_secs=None, eta_clock="", eta_rel="",
+        pct=37.0,
+        pct_str="37%",
+        clock="Thu 14:00",
+        rel="(2d 0h)",
+        forecast=93,
+        fc_str="→93%",
+        eta_secs=None,
+        eta_clock="",
+        eta_rel="",
         capped=True,
     )
     txt = _window_text(cell, bar_w=10, pw=4, cw=9, rw=8)
@@ -908,8 +915,15 @@ def test_window_text_marks_capped_clock_with_hourglass() -> None:
 
 def test_window_text_non_capped_clock_has_no_hourglass() -> None:
     cell = _WindowCell(
-        pct=37.0, pct_str="37%", clock="14:00", rel="(2h 0m)",
-        forecast=199, fc_str="→199%", eta_secs=None, eta_clock="", eta_rel="",
+        pct=37.0,
+        pct_str="37%",
+        clock="14:00",
+        rel="(2h 0m)",
+        forecast=199,
+        fc_str="→199%",
+        eta_secs=None,
+        eta_clock="",
+        eta_rel="",
         capped=False,
     )
     txt = _window_text(cell, bar_w=10, pw=4, cw=5, rw=8)

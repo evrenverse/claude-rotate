@@ -438,7 +438,8 @@ def test_loaded_account_still_picked_when_sole_usable() -> None:
 
 
 def test_capacity_availability_is_product_of_h5_and_load() -> None:
-    # h5 at 80% with 3600s left -> level=(100-80)/100=0.20; pace=1.0 (rate exactly fills remaining budget)
+    # h5 at 80% with 3600s left -> level=(100-80)/100=0.20;
+    # pace=1.0 (rate exactly fills remaining budget)
     # session_load 2.4 -> _session_load_availability = 1 - 2.4*0.25 = 0.40
     c = replace(_cand(h5=80.0, w7=10.0), session_load=2.4)
     assert _capacity_availability(c) == 0.20 * 0.40
@@ -460,9 +461,7 @@ def test_tier2_soon_exception_skips_loaded_expiring_account() -> None:
     # (With the default ~1-day reset, soon_walling's weekly urgency would be ~9x
     #  higher, so Tier-3 would pick it regardless -- making the capacity gate
     #  invisible to this test.)
-    soon_walling = _cand(
-        plan="max_20x", expires_days=5, h5=80.0, w7=10.0, w7_secs=7 * 24 * 3600
-    )
+    soon_walling = _cand(plan="max_20x", expires_days=5, h5=80.0, w7=10.0, w7_secs=7 * 24 * 3600)
     fresh_high_week = _cand(plan="max_20x", expires_days=None, h5=2.0, w7=90.0)
     best, _ = pick_best([soon_walling, fresh_high_week], now=FIXED_NOW)
     assert best is not soon_walling  # soon-exception did NOT force the walling account
