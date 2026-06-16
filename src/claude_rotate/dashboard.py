@@ -316,7 +316,7 @@ def _window_cells(
             cells.append(_NA_CELL)
             continue
         capped = horizon_arg is not None
-        horizon = horizon_arg if capped else secs
+        horizon = horizon_arg if horizon_arg is not None else secs
         forecast = compute_forecast(pct, secs, window_secs, horizon_arg) if show_forecast else None
         eta = compute_limit_eta(pct, secs, window_secs, horizon_arg) if show_forecast else None
         prefix = "~" if from_cache else ""

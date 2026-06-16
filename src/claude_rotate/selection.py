@@ -241,7 +241,7 @@ def _session_load_availability(c: Candidate) -> float:
 
 
 def _capacity_availability(c: Candidate) -> float:
-    """Combined capacity dampener in [0, 1]: 5h-window availability × live-session load signal.
+    """Combined capacity dampener in [0, 1]: 5h-window availability and live-session load.
 
     Product of the two dampeners that answer "is there room right now": the 5h wall
     (`_h5_availability` — level and burn-pace) and the live-session stampede signal
