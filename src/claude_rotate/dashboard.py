@@ -722,8 +722,13 @@ def compact_one_liner(row: DashboardRow) -> str:
 
 
 def status_json(
-    rows: list[DashboardRow], *, chosen: str | None, active: str | None = None
+    rows: list[DashboardRow],
+    *,
+    chosen: str | None,
+    active: str | None = None,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    now = now or datetime.now(UTC)
     return {
         "chosen": chosen,
         "active": active,
@@ -740,10 +745,16 @@ def status_json(
                 # Always emitted (data, not display): the CLAUDE_ROTATE_FORECAST toggle
                 # only suppresses the human dashboard, never the machine-readable JSON.
                 "h5_forecast_pct": compute_forecast(
-                    r.h5_pct, r.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS
+                    r.h5_pct,
+                    r.h5_reset_secs,
+                    FORECAST_WINDOW_5H_SECONDS,
+                    expiry_horizon(r.account.effective_expires_at, r.h5_reset_secs, now),
                 ),
                 "w7_forecast_pct": compute_forecast(
-                    r.w7_pct, r.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS
+                    r.w7_pct,
+                    r.w7_reset_secs,
+                    FORECAST_WINDOW_7D_SECONDS,
+                    expiry_horizon(r.account.effective_expires_at, r.w7_reset_secs, now),
                 ),
                 "status": r.status,
                 "note": r.note,
