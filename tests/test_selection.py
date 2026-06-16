@@ -449,3 +449,29 @@ def test_capacity_availability_is_one_without_data() -> None:
     # session_load defaults to 0.0 on Candidate -> load dampener also 1.0
     c = _cand(h5=None, w7=10.0)
     assert _capacity_availability(c) == 1.0
+
+
+def test_tier2_soon_exception_skips_loaded_expiring_account() -> None:
+    # Spread > 30 triggers Tier-2. The soon-expiring (5d), low-weekly account is
+    # walling its 5h (capacity < 0.5) -> loses the soon-exception -> Tier-3 (the
+    # _pick_tier3 fall-through) decides on the dampened drain score instead.
+    # w7_secs=7*24*3600 is load-bearing: it gives soon_walling a low weekly
+    # urgency so Tier-3 favours the freshly-draining high-weekly account instead.
+    # (With the default ~1-day reset, soon_walling's weekly urgency would be ~9x
+    #  higher, so Tier-3 would pick it regardless -- making the capacity gate
+    #  invisible to this test.)
+    soon_walling = _cand(
+        plan="max_20x", expires_days=5, h5=80.0, w7=10.0, w7_secs=7 * 24 * 3600
+    )
+    fresh_high_week = _cand(plan="max_20x", expires_days=None, h5=2.0, w7=90.0)
+    best, _ = pick_best([soon_walling, fresh_high_week], now=FIXED_NOW)
+    assert best is not soon_walling  # soon-exception did NOT force the walling account
+
+
+def test_tier2_soon_exception_still_picks_expiring_with_capacity() -> None:
+    # Regression: soon-expiring (5d), low weekly, fresh 5h, no load -> capacity
+    # ok -> the soon-exception still selects it over a high-weekly fresh account.
+    soon_ok = _cand(plan="max_20x", expires_days=5, h5=5.0, w7=10.0)
+    fresh_high_week = _cand(plan="max_20x", expires_days=None, h5=2.0, w7=90.0)
+    best, _ = pick_best([soon_ok, fresh_high_week], now=FIXED_NOW)
+    assert best is soon_ok

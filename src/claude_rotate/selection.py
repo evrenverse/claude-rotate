@@ -281,7 +281,10 @@ def _pick_tier2(usable: list[Candidate], now: datetime) -> Candidate | None:
     if spread <= BALANCE_THRESHOLD_PERCENT:
         return None
 
-    # Exception: soon-expiring with still-reasonable weekly headroom wins
+    # Exception: soon-expiring with still-reasonable weekly headroom wins —
+    # but only while it can still host another session now (same capacity gate
+    # as Tier-1). A loaded/walling soon-expiring account falls through to the
+    # load/pace-aware Tier-3 below.
     soon_with_quota = []
     for c in usable:
         secs = c.subscription_expiry_seconds(now)
@@ -290,6 +293,7 @@ def _pick_tier2(usable: list[Candidate], now: datetime) -> Candidate | None:
             secs is not None
             and 0 < secs <= EXPIRY_SOON_DAYS * 86400
             and w7 < SOON_QUOTA_CEILING_PERCENT
+            and _capacity_availability(c) >= CAPACITY_GATE_THRESHOLD
         ):
             soon_with_quota.append(c)
     if soon_with_quota:
