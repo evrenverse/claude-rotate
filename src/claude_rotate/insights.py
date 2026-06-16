@@ -34,16 +34,41 @@ def plan_label(plan: str) -> str:
     return _PLAN_LABELS.get(plan, plan)
 
 
-def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> int | None:
-    """Linear projection of where ``pct`` lands at window reset.
+def seconds_until(moment: datetime | None, now: datetime) -> int | None:
+    """Whole seconds from ``now`` until ``moment`` (clamped to >= 0); ``None`` if no moment."""
+    if moment is None:
+        return None
+    return max(0, int((moment - now).total_seconds()))
 
-    Stateless — relies only on the current percentage and seconds-until-reset.
-    Truncates exactly like the Bash statusline (``int(pct)`` + floor division)
-    so the dashboard and statusline show the same figure for the same inputs.
-    Returns ``None`` when there is no usable elapsed time (no active window or
-    a brand-new window) or when usage is already at/over the limit (``pct >=
-    100`` — the projection would only be noise), 0 for zero usage, and caps the
-    result at 999.
+
+def expiry_horizon(expires_at: datetime | None, reset_secs: int, now: datetime) -> int | None:
+    """Forecast horizon capped at subscription expiry, or ``None`` when the window resets first.
+
+    Returns the seconds-until-expiry only when the subscription dies strictly before the
+    window reset (``0 < expiry < reset_secs``); otherwise ``None`` (no cap). Pairs with
+    ``compute_forecast``/``compute_limit_eta``'s ``horizon_secs`` argument, and doubles as
+    the renderers' "is this cell capped?" signal (non-``None`` == capped).
+    """
+    expiry = seconds_until(expires_at, now)
+    if expiry is not None and 0 < expiry < reset_secs:
+        return expiry  # non-None doubles as the renderers' "is capped?" signal
+    return None
+
+
+def compute_forecast(
+    pct: float | None,
+    reset_secs: int,
+    window_secs: int,
+    horizon_secs: int | None = None,
+) -> int | None:
+    """Linear projection of where ``pct`` lands at the projection horizon.
+
+    The horizon defaults to the window reset (``reset_secs``); pass ``horizon_secs`` to cap
+    it earlier (e.g. at subscription expiry). ``elapsed = window_secs - reset_secs`` and is
+    unaffected by the horizon — only the projection horizon shortens. With ``horizon_secs is
+    None`` the result is bit-identical to projecting to the reset. Same truncation as the Bash
+    statusline; returns ``None`` for no usable elapsed time or ``pct >= 100``, 0 for zero
+    usage, caps at 999.
     """
     if pct is None or reset_secs <= 0:
         return None
@@ -54,18 +79,22 @@ def compute_forecast(pct: float | None, reset_secs: int, window_secs: int) -> in
         return 0
     if pct >= 100:
         return None
-    return min(999, int(pct) * window_secs // elapsed)
+    horizon = reset_secs if horizon_secs is None else min(reset_secs, horizon_secs)
+    return min(999, int(pct) * (elapsed + horizon) // elapsed)
 
 
-def compute_limit_eta(pct: float | None, reset_secs: int, window_secs: int) -> int | None:
-    """Seconds-from-now until usage is projected to reach 100%.
+def compute_limit_eta(
+    pct: float | None,
+    reset_secs: int,
+    window_secs: int,
+    horizon_secs: int | None = None,
+) -> int | None:
+    """Seconds-from-now until usage is projected to reach 100%, within the horizon.
 
-    Linear projection at the current rate, mirroring ``compute_forecast``'s
-    ``int(pct)`` truncation so the forecast % and this ETA stay consistent.
-    Returns ``None`` when there is no usable elapsed time (no active / brand-new
-    window), when usage is zero or already at/over the limit, or when the window
-    resets before 100% is reached (equivalently: ``compute_forecast`` would be
-    ``<= 100``, so there is no limit hit to forecast inside this window).
+    The horizon defaults to the window reset; pass ``horizon_secs`` to cap it earlier.
+    Returns ``None`` when there is no usable elapsed time, usage is zero or already >= 100,
+    or the projected wall lands at/after the horizon (window resets — or the subscription
+    expires — before 100% is reached).
     """
     if pct is None or reset_secs <= 0:
         return None
@@ -76,8 +105,9 @@ def compute_limit_eta(pct: float | None, reset_secs: int, window_secs: int) -> i
     if p <= 0 or p >= 100:
         return None
     eta = (100 - p) * elapsed // p
-    if eta >= reset_secs:
-        return None  # window resets before the wall is reached
+    horizon = reset_secs if horizon_secs is None else min(reset_secs, horizon_secs)
+    if eta >= horizon:
+        return None
     return eta
 
 
