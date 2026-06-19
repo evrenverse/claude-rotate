@@ -17,11 +17,14 @@ from claude_rotate.config import (
     EXPIRY_SOON_DAYS,
     EXPIRY_URGENT_DAYS,
     FORECAST_WINDOW_5H_SECONDS,
+    FORECAST_WINDOW_7D_SECONDS,
     HEADROOM_PERCENT,
     PACE_MIN_ELAPSED_SECONDS,
     SESSION_LOAD_PENALTY,
     SOON_QUOTA_CEILING_PERCENT,
+    WEEKLY_PACE_MIN_ELAPSED_SECONDS,
 )
+from claude_rotate.insights import compute_forecast
 
 _PLAN_RANKS: dict[str, int] = {
     "max_20x": 2,
@@ -261,16 +264,50 @@ def _drain_urgency_score(c: Candidate) -> float:
     )
 
 
+def _weekly_forecast(c: Candidate) -> int | None:
+    """The dashboard's 7d ``[→XX%]`` projection, or None when the weekly window
+    is too young for the projection to be anything but noise.
+
+    Same ``compute_forecast`` the status dashboard renders — so what the user
+    sees on the weekly row is what drives the pick.
+    """
+    if c.w7_reset_secs <= 0:
+        return None
+    if FORECAST_WINDOW_7D_SECONDS - c.w7_reset_secs < WEEKLY_PACE_MIN_ELAPSED_SECONDS:
+        return None
+    return compute_forecast(c.w7_pct, c.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
+
+
+def _tier3_gated(c: Candidate) -> bool:
+    """An account loses its Tier-3 drain preference when it either cannot host
+    work right now — 5h level/pace/live-load below the capacity gate, the same
+    gate Tier-1/Tier-2 use — or is projected to blow its *weekly* wall before
+    reset. The weekly forecast is the piece the capacity gate misses, since that
+    gate only sees the 5h window.
+    """
+    if _capacity_availability(c) < CAPACITY_GATE_THRESHOLD:
+        return True
+    fc = _weekly_forecast(c)
+    return fc is not None and fc > 100
+
+
 def _pick_tier3(usable: list[Candidate]) -> Candidate:
-    ranked = sorted(
-        usable,
+    # Gate: prefer accounts that can take work now AND aren't projected to blow
+    # their weekly wall — no matter how urgent a gated account's weekly drain is.
+    # A soft [0,1] dampener can't enforce this: _weekly_urgency is unbounded, so a
+    # near-reset account outweighs a fresh one even while walling. Only when every
+    # usable account is gated do we rank the whole set on the capacity-aware drain
+    # score (which already deprioritises the most walling / least-free one).
+    healthy = [c for c in usable if not _tier3_gated(c)]
+    pool = healthy or usable
+    return sorted(
+        pool,
         key=lambda c: (
             -_drain_urgency_score(c),
             -_hourly_urgency(c),
             -plan_rank(c.account.plan),
         ),
-    )
-    return ranked[0]
+    )[0]
 
 
 def _pick_tier2(usable: list[Candidate], now: datetime) -> Candidate | None:
