@@ -60,6 +60,10 @@ CAPACITY_GATE_THRESHOLD = 0.5
 # statusline uses (5-hour and 7-day unified rate-limit windows).
 FORECAST_WINDOW_5H_SECONDS = 5 * 3600  # 18000
 FORECAST_WINDOW_7D_SECONDS = 7 * 86400  # 604800
+# Weekly analogue of PACE_MIN_ELAPSED_SECONDS: ignore the weekly forecast until
+# this much of the 7d window has elapsed, so a freshly reset window with a small
+# early burst doesn't project a noisy >100%. Same 5% share as the 5h gate.
+WEEKLY_PACE_MIN_ELAPSED_SECONDS = FORECAST_WINDOW_7D_SECONDS // 20  # ~8.4h
 
 # HTTP
 INFERENCE_URL = "https://api.anthropic.com/v1/messages"

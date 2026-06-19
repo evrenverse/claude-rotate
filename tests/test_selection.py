@@ -329,6 +329,41 @@ def test_tier3_no_weekly_data_falls_back_to_hourly_urgency() -> None:
     assert chosen.account is b.account
 
 
+def test_tier3_overburning_account_yields_to_fresh_despite_higher_weekly_urgency() -> None:
+    # The user's case: the overburner has a much higher weekly urgency (earlier
+    # weekly reset, 50% used) AND its 5h projects >100% (60% used, window half
+    # gone → forecast 120%). The free account has lower weekly urgency but does
+    # not overburn. Without the gate the overburner's weekly urgency wins; with
+    # it the fresh account must be picked.
+    overburner = _cand(plan="max_20x", h5=60.0, w7=50.0, h5_secs=9000, w7_secs=20 * 3600)
+    free = _cand(plan="max_20x", h5=5.0, w7=10.0, h5_secs=9000, w7_secs=140 * 3600)
+    chosen, wait = pick_best([overburner, free], now=FIXED_NOW)
+    assert wait is None
+    assert chosen.account is free.account
+
+
+def test_tier3_all_gated_picks_least_walling() -> None:
+    # No un-gated account available: both 5h windows are past the capacity gate
+    # (70% and 90% used). All gated → the capacity-aware drain score ranks the
+    # whole set, and the one with more 5h headroom (the milder burn) wins.
+    milder = _cand(plan="max_20x", h5=70.0, w7=10.0, h5_secs=9000, w7_secs=140 * 3600)
+    hotter = _cand(plan="max_20x", h5=90.0, w7=10.0, h5_secs=9000, w7_secs=140 * 3600)
+    chosen, _ = pick_best([hotter, milder], now=FIXED_NOW)
+    assert chosen.account is milder.account
+
+
+def test_tier3_weekly_overburn_also_gates() -> None:
+    # The weekly forecast counts too: an account that projects >100% on the 7d
+    # window (40% used, window ~30% elapsed → ~133%) yields to a fresh account,
+    # even with a fresh 5h window.
+    weekly_overburn = _cand(
+        plan="max_20x", h5=5.0, w7=40.0, h5_secs=9000, w7_secs=int(0.7 * 604800)
+    )
+    free = _cand(plan="max_20x", h5=5.0, w7=10.0, h5_secs=9000, w7_secs=140 * 3600)
+    chosen, _ = pick_best([weekly_overburn, free], now=FIXED_NOW)
+    assert chosen.account is free.account
+
+
 def test_fallback_returns_earliest_available_when_all_exhausted() -> None:
     a = _cand(plan="max_20x", h5=100.0, w7=100.0, h5_secs=3600, w7_secs=86400)
     b = _cand(plan="max_20x", h5=100.0, w7=100.0, h5_secs=300, w7_secs=86400)
