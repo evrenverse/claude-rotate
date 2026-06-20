@@ -122,8 +122,14 @@ def _render_cards(
             head += f" · {indicator}"
 
         specs = (
-            ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS),
-            ("week", row.w7_pct, row.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS),
+            ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS, row.h5_rate_per_sec),
+            (
+                "week",
+                row.w7_pct,
+                row.w7_reset_secs,
+                FORECAST_WINDOW_7D_SECONDS,
+                row.w7_rate_per_sec,
+            ),
         )
 
         # Show a weekday on every clock as soon as any dated reset lands on another
@@ -139,14 +145,14 @@ def _render_cards(
             and _lands_on_other_day(
                 expiry_horizon(row.account.effective_expires_at, secs, now_utc) or secs
             )
-            for _, pct, secs, _ in specs
+            for _, pct, secs, _, _ in specs
         )
 
         cells: list[_Cell] = []
-        for label, pct, secs, window in specs:
+        for label, pct, secs, window, rate in specs:
             horizon_arg = expiry_horizon(row.account.effective_expires_at, secs, now_utc)
             capped = horizon_arg is not None
-            forecast = compute_forecast(pct, secs, window, horizon_arg)
+            forecast = compute_forecast(pct, secs, window, horizon_arg, rate)
             if pct is not None:
                 hz = horizon_arg if horizon_arg is not None else secs
                 reset_clk = clock_at(now, hz, show_weekday=show_weekday)
@@ -159,7 +165,7 @@ def _render_cards(
                 special, fc_str, eta_clk, eta_rel = "—", None, None, None
             else:
                 special, fc_str = None, f"→{forecast}%"
-                eta = compute_limit_eta(pct, secs, window, horizon_arg)
+                eta = compute_limit_eta(pct, secs, window, horizon_arg, rate)
                 if eta is not None:
                     eta_clk = clock_at(now, eta, show_weekday=show_weekday)
                     eta_rel = rel_duration(eta)

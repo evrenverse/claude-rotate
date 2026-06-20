@@ -18,9 +18,9 @@ Shared quota semantics (forecasts, warnings, wording) live in
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from rich import box
 from rich.console import Console
@@ -29,6 +29,9 @@ from rich.text import Text
 
 from claude_rotate.accounts import Account
 from claude_rotate.config import (
+    FORECAST_TAIL_MIN_SPAN_SECONDS,
+    FORECAST_TAIL_WINDOW_5H_SECONDS,
+    FORECAST_TAIL_WINDOW_7D_SECONDS,
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
     HEADROOM_PERCENT,
@@ -48,6 +51,7 @@ from claude_rotate.sessions import SessionLoad
 
 __all__ = [
     "DashboardRow",
+    "attach_forecast_rates",
     "compact_one_liner",
     "compute_forecast",
     "compute_limit_eta",
@@ -128,6 +132,53 @@ class DashboardRow:
     status: str = "ok"  # "ok" | "relogin" | "rate_limited" | "sub_canceled" | "no_data"
     note: str = ""
     session_load: SessionLoad | None = None
+    # Recent burn (%-points/sec) for the recency-aware forecast; None -> average pace.
+    h5_rate_per_sec: float | None = None
+    w7_rate_per_sec: float | None = None
+
+
+class _RateSource(Protocol):
+    def recent_rate(
+        self,
+        name: str,
+        pct_now: float | None,
+        *,
+        window: str,
+        now: float,
+        tail_secs: int,
+        min_span: int,
+    ) -> float | None: ...
+
+
+def attach_forecast_rates(
+    rows: list[DashboardRow], cache: _RateSource, now: float
+) -> list[DashboardRow]:
+    """Stamp each row's recent 5h/7d burn rate from the usage history (for the forecast).
+
+    Looked up from the on-disk usage history; rows with no usable history keep ``None``
+    and fall back to the average-pace projection. Call this once after building the rows
+    and before rendering, so the dashboard, report and JSON all see the same rates.
+    """
+    out: list[DashboardRow] = []
+    for r in rows:
+        h5 = cache.recent_rate(
+            r.account.name,
+            r.h5_pct,
+            window="5h",
+            now=now,
+            tail_secs=FORECAST_TAIL_WINDOW_5H_SECONDS,
+            min_span=FORECAST_TAIL_MIN_SPAN_SECONDS,
+        )
+        w7 = cache.recent_rate(
+            r.account.name,
+            r.w7_pct,
+            window="7d",
+            now=now,
+            tail_secs=FORECAST_TAIL_WINDOW_7D_SECONDS,
+            min_span=FORECAST_TAIL_MIN_SPAN_SECONDS,
+        )
+        out.append(replace(r, h5_rate_per_sec=h5, w7_rate_per_sec=w7))
+    return out
 
 
 _EXPIRY_GRADIENT_DAYS = 30
@@ -287,12 +338,13 @@ def _window_cells(
     show_forecast: bool,
 ) -> list[_WindowCell]:
     """Build one column of cells; the weekday slot is shared per column."""
-    datas: list[tuple[float | None, int, bool, int | None]] = []
+    datas: list[tuple[float | None, int, bool, int | None, float | None]] = []
     for r in rows:
         pct = r.h5_pct if window == "5h" else r.w7_pct
         secs = r.h5_reset_secs if window == "5h" else r.w7_reset_secs
+        rate = r.h5_rate_per_sec if window == "5h" else r.w7_rate_per_sec
         horizon_arg = expiry_horizon(r.account.effective_expires_at, secs, now_local)
-        datas.append((pct if r.status == "ok" else None, secs, r.from_cache, horizon_arg))
+        datas.append((pct if r.status == "ok" else None, secs, r.from_cache, horizon_arg, rate))
 
     def lands_on_other_day(secs: int) -> bool:
         return (now_local + timedelta(seconds=max(secs, 0))).date() != now_local.date()
@@ -303,22 +355,27 @@ def _window_cells(
             lands_on_other_day(horizon_arg if horizon_arg is not None else secs)
             or (
                 show_forecast
-                and (eta := compute_limit_eta(pct, secs, window_secs, horizon_arg)) is not None
+                and (eta := compute_limit_eta(pct, secs, window_secs, horizon_arg, rate))
+                is not None
                 and lands_on_other_day(eta)
             )
         )
-        for pct, secs, _, horizon_arg in datas
+        for pct, secs, _, horizon_arg, rate in datas
     )
 
     cells: list[_WindowCell] = []
-    for pct, secs, from_cache, horizon_arg in datas:
+    for pct, secs, from_cache, horizon_arg, rate in datas:
         if pct is None:
             cells.append(_NA_CELL)
             continue
         capped = horizon_arg is not None
         horizon = horizon_arg if horizon_arg is not None else secs
-        forecast = compute_forecast(pct, secs, window_secs, horizon_arg) if show_forecast else None
-        eta = compute_limit_eta(pct, secs, window_secs, horizon_arg) if show_forecast else None
+        forecast = (
+            compute_forecast(pct, secs, window_secs, horizon_arg, rate) if show_forecast else None
+        )
+        eta = (
+            compute_limit_eta(pct, secs, window_secs, horizon_arg, rate) if show_forecast else None
+        )
         prefix = "~" if from_cache else ""
         cells.append(
             _WindowCell(
@@ -749,12 +806,14 @@ def status_json(
                     r.h5_reset_secs,
                     FORECAST_WINDOW_5H_SECONDS,
                     expiry_horizon(r.account.effective_expires_at, r.h5_reset_secs, now),
+                    r.h5_rate_per_sec,
                 ),
                 "w7_forecast_pct": compute_forecast(
                     r.w7_pct,
                     r.w7_reset_secs,
                     FORECAST_WINDOW_7D_SECONDS,
                     expiry_horizon(r.account.effective_expires_at, r.w7_reset_secs, now),
+                    r.w7_rate_per_sec,
                 ),
                 "status": r.status,
                 "note": r.note,

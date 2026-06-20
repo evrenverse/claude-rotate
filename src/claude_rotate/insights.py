@@ -14,7 +14,22 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from claude_rotate.config import FORECAST_WINDOW_7D_SECONDS
+from claude_rotate.config import FORECAST_RECENCY_WEIGHT, FORECAST_WINDOW_7D_SECONDS
+
+
+def _blended_rate(pct: float, elapsed: int, rate_per_sec: float) -> float:
+    """%-points/sec blending the observed tail rate with the window-average rate.
+
+    ``rate_per_sec`` is the burn observed over a recent tail window; the average
+    rate is ``pct / elapsed``. ``FORECAST_RECENCY_WEIGHT`` controls how strongly
+    the recent tail dominates. Clamped to >= 0 (a reset would make the tail rate
+    negative; the caller already drops those, this is belt-and-suspenders).
+    """
+    avg_rate = pct / elapsed
+    return max(
+        0.0, FORECAST_RECENCY_WEIGHT * rate_per_sec + (1 - FORECAST_RECENCY_WEIGHT) * avg_rate
+    )
+
 
 if TYPE_CHECKING:
     from claude_rotate.dashboard import DashboardRow
@@ -60,15 +75,22 @@ def compute_forecast(
     reset_secs: int,
     window_secs: int,
     horizon_secs: int | None = None,
+    rate_per_sec: float | None = None,
 ) -> int | None:
     """Linear projection of where ``pct`` lands at the projection horizon.
 
     The horizon defaults to the window reset (``reset_secs``); pass ``horizon_secs`` to cap
     it earlier (e.g. at subscription expiry). ``elapsed = window_secs - reset_secs`` and is
-    unaffected by the horizon — only the projection horizon shortens. With ``horizon_secs is
-    None`` the result is bit-identical to projecting to the reset. Same truncation as the Bash
-    statusline; returns ``None`` for no usable elapsed time or ``pct >= 100``, 0 for zero
-    usage, caps at 999.
+    unaffected by the horizon — only the projection horizon shortens.
+
+    ``rate_per_sec`` (when given) is the burn observed over a recent tail window, in
+    %-points/sec; the projection then blends it with the window-average rate so a late
+    burst pushes the result up instead of being diluted across the whole window. With
+    ``rate_per_sec is None`` the result is the plain average-pace projection, bit-identical
+    to the original (and to projecting to the reset when ``horizon_secs is None``).
+
+    Returns ``None`` for no usable elapsed time or ``pct >= 100``, 0 for zero usage, caps
+    at 999.
     """
     if pct is None or reset_secs <= 0:
         return None
@@ -80,7 +102,9 @@ def compute_forecast(
     if pct >= 100:
         return None
     horizon = reset_secs if horizon_secs is None else min(reset_secs, horizon_secs)
-    return min(999, int(pct) * (elapsed + horizon) // elapsed)
+    if rate_per_sec is None:
+        return min(999, int(pct) * (elapsed + horizon) // elapsed)
+    return min(999, max(0, int(pct + _blended_rate(pct, elapsed, rate_per_sec) * horizon)))
 
 
 def compute_limit_eta(
@@ -88,10 +112,13 @@ def compute_limit_eta(
     reset_secs: int,
     window_secs: int,
     horizon_secs: int | None = None,
+    rate_per_sec: float | None = None,
 ) -> int | None:
     """Seconds-from-now until usage is projected to reach 100%, within the horizon.
 
     The horizon defaults to the window reset; pass ``horizon_secs`` to cap it earlier.
+    ``rate_per_sec`` blends the recent tail rate in the same way ``compute_forecast`` does,
+    so the ETA stays consistent with the projected ``%`` (forecast >= 100 iff ETA <= horizon).
     Returns ``None`` when there is no usable elapsed time, usage is zero or already >= 100,
     or the projected wall lands at/after the horizon (window resets — or the subscription
     expires — before 100% is reached).
@@ -104,8 +131,14 @@ def compute_limit_eta(
     p = int(pct)
     if p <= 0 or p >= 100:
         return None
-    eta = (100 - p) * elapsed // p
     horizon = reset_secs if horizon_secs is None else min(reset_secs, horizon_secs)
+    if rate_per_sec is None:
+        eta = (100 - p) * elapsed // p
+    else:
+        eff_rate = _blended_rate(pct, elapsed, rate_per_sec)
+        if eff_rate <= 0:
+            return None
+        eta = int((100 - pct) / eff_rate)
     if eta >= horizon:
         return None
     return eta
