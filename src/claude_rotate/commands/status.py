@@ -25,6 +25,7 @@ from claude_rotate.accounts import Store
 from claude_rotate.config import SESSION_ACTIVE_WINDOW_SECONDS, Paths
 from claude_rotate.dashboard import (
     DashboardRow,
+    attach_forecast_rates,
     forecast_enabled,
     render_dashboard,
     render_stale_footer,
@@ -287,6 +288,7 @@ def _collect(paths: Paths) -> _Collected:
         paths, now=time.time(), active_window=float(SESSION_ACTIVE_WINDOW_SECONDS)
     )
     rows = [replace(r, session_load=loads.get(r.account.name)) for r in rows]
+    rows = attach_forecast_rates(rows, cache, time.time())
 
     return _Collected(
         rows=rows,

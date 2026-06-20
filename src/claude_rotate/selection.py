@@ -275,6 +275,9 @@ def _weekly_forecast(c: Candidate) -> int | None:
         return None
     if FORECAST_WINDOW_7D_SECONDS - c.w7_reset_secs < WEEKLY_PACE_MIN_ELAPSED_SECONDS:
         return None
+    # ponytail: routing uses the stable window-average pace, not the recency-blended
+    # rate the dashboard now shows. Pass the candidate's tail rate here to align them
+    # if routing should react to recent bursts too.
     return compute_forecast(c.w7_pct, c.w7_reset_secs, FORECAST_WINDOW_7D_SECONDS)
 
 

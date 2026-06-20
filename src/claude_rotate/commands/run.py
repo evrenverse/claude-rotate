@@ -21,6 +21,7 @@ from claude_rotate.config import (
 )
 from claude_rotate.dashboard import (
     DashboardRow,
+    attach_forecast_rates,
     compact_one_liner,
     forecast_enabled,
     render_dashboard,
@@ -231,6 +232,11 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                 )
             )
         resolved.append(c)
+
+    # Stamp the recent-burn rates from the usage history so the rendered forecast
+    # weights the recent tail, not just the window average. (Selection/routing
+    # still uses the average pace — see selection.py.)
+    dashboard_rows = attach_forecast_rates(dashboard_rows, cache, time.time())
 
     # Disabled accounts are never selection candidates (they remain in
     # dashboard_rows so the user still sees them, greyed out).

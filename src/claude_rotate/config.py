@@ -65,6 +65,18 @@ FORECAST_WINDOW_7D_SECONDS = 7 * 86400  # 604800
 # early burst doesn't project a noisy >100%. Same 5% share as the 5h gate.
 WEEKLY_PACE_MIN_ELAPSED_SECONDS = FORECAST_WINDOW_7D_SECONDS // 20  # ~8.4h
 
+# Recency-aware forecast: the plain projection assumes the window-average burn
+# rate continues. These blend in the rate observed over a recent tail window so
+# a late burst pushes the projection up instead of being diluted across the
+# whole elapsed window. The tail rate needs the on-disk usage history
+# (UsageCache); with no history the forecast falls back to the average pace.
+FORECAST_RECENCY_WEIGHT = 0.6  # weight of the tail rate vs. window-average rate
+FORECAST_TAIL_WINDOW_5H_SECONDS = 3600  # look back 1h for the 5h forecast rate
+FORECAST_TAIL_WINDOW_7D_SECONDS = 12 * 3600  # look back 12h for the 7d forecast rate
+FORECAST_TAIL_MIN_SPAN_SECONDS = 300  # min span between the two samples (noise guard)
+USAGE_HISTORY_RETENTION_SECONDS = 12 * 3600  # prune history older than the longest tail
+USAGE_HISTORY_MAX_POINTS = 500  # hard cap on stored samples per account
+
 # HTTP
 INFERENCE_URL = "https://api.anthropic.com/v1/messages"
 USAGE_URL = "https://api.anthropic.com/api/oauth/usage"
