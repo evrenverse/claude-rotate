@@ -1,6 +1,6 @@
 [project]
 name = "claude-rotate"
-version = "0.5.0"
+version = "0.6.0"
 description = "Quota-aware account rotator for Claude Code subscriptions"
 readme = "README.md"
 license = "MIT"
