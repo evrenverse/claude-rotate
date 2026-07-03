@@ -102,7 +102,9 @@ def _render_cards(
     under the reset clock. ``build_report`` wraps each returned block in its own
     fence so the chat UI renders them as separate cards.
     """
-    label_width = len("week")
+    # Scoped labels (e.g. "fable") can be wider than "week"; share one width
+    # across all cards so every fact line's bar column stays aligned.
+    label_width = max([len("week"), *(len(s.label) for row in ordered for s in row.w7_scoped)])
     # A label-less sub-line is indented to the fact line's pct column: blank label
     # + blank bar, with the fact line's two-space gaps.
     sub_prefix = f"{'':<{label_width}}  {' ' * _BAR_WIDTH}  "
@@ -129,6 +131,13 @@ def _render_cards(
                 row.w7_reset_secs,
                 FORECAST_WINDOW_7D_SECONDS,
                 row.w7_rate_per_sec,
+            ),
+            # Model-scoped weekly windows (e.g. Fable's own cap). No burn-rate
+            # history is tracked for these, so the forecast falls back to the
+            # average-pace projection (rate=None).
+            *(
+                (s.label, s.pct, s.reset_secs, FORECAST_WINDOW_7D_SECONDS, None)
+                for s in row.w7_scoped
             ),
         )
 

@@ -162,6 +162,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                         h5_reset_secs=cached.h5_reset_secs,
                         w7_reset_secs=cached.w7_reset_secs,
                         w7_opus_pct=cached.w7_opus_pct,
+                        w7_scoped=cached.w7_scoped,
                     )
                     dashboard_rows.append(
                         DashboardRow(
@@ -171,6 +172,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                             h5_reset_secs=c.h5_reset_secs,
                             w7_reset_secs=c.w7_reset_secs,
                             from_cache=True,
+                            w7_scoped=c.w7_scoped,
                         )
                     )
                     resolved.append(c)
@@ -197,6 +199,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                     h5_reset_secs=cached.h5_reset_secs,
                     w7_reset_secs=cached.w7_reset_secs,
                     w7_opus_pct=cached.w7_opus_pct,
+                    w7_scoped=cached.w7_scoped,
                 )
                 dashboard_rows.append(
                     DashboardRow(
@@ -206,6 +209,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                         h5_reset_secs=c.h5_reset_secs,
                         w7_reset_secs=c.w7_reset_secs,
                         from_cache=True,
+                        w7_scoped=c.w7_scoped,
                     )
                 )
             else:
@@ -229,6 +233,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                     w7_pct=c.w7_pct,
                     h5_reset_secs=c.h5_reset_secs,
                     w7_reset_secs=c.w7_reset_secs,
+                    w7_scoped=c.w7_scoped,
                 )
             )
         resolved.append(c)
@@ -360,6 +365,7 @@ def _to_probe_result(c: Candidate) -> ProbeResult:
         h5_reset_secs=c.h5_reset_secs,
         w7_reset_secs=c.w7_reset_secs,
         w7_opus_pct=c.w7_opus_pct,
+        w7_scoped=c.w7_scoped,
     )
 
 

@@ -19,6 +19,7 @@ from claude_rotate.config import (
     Paths,
 )
 from claude_rotate.probe import ProbeResult
+from claude_rotate.selection import ScopedLimit
 
 MAX_CACHE_AGE_SECONDS = 10 * 60
 
@@ -76,6 +77,20 @@ class UsageCache:
             # window elapsed its usage has reset as well.
             w7_opus_pct = 0.0
 
+        scoped: list[ScopedLimit] = []
+        for entry in raw.get("w7_scoped") or []:
+            if not isinstance(entry, list) or len(entry) != 3:
+                continue
+            label, pct, reset_at = entry
+            secs = _secs(float(reset_at))
+            scoped.append(
+                ScopedLimit(
+                    label=str(label),
+                    pct=0.0 if secs == 0 else float(pct),
+                    reset_secs=secs,
+                )
+            )
+
         return ProbeResult(
             ok=True,
             http_code=int(raw.get("http_code", 200)),
@@ -84,6 +99,7 @@ class UsageCache:
             h5_reset_secs=h5_secs,
             w7_reset_secs=w7_secs,
             w7_opus_pct=w7_opus_pct,
+            w7_scoped=tuple(scoped),
         )
 
     def save(self, name: str, result: ProbeResult) -> None:
@@ -99,6 +115,7 @@ class UsageCache:
             "w7_opus_pct": result.w7_opus_pct,
             "h5_reset_at": now + result.h5_reset_secs,
             "w7_reset_at": now + result.w7_reset_secs,
+            "w7_scoped": [[s.label, s.pct, now + s.reset_secs] for s in result.w7_scoped],
         }
         self._atomic_write(self._path_for(name), payload)
         self._append_history(name, now, result.h5_pct, result.w7_pct)

@@ -171,3 +171,76 @@ def test_probe_many_failed_base_probe_skips_oauth_call(monkeypatch) -> None:
     cands = probe.probe_many([account])
     assert cands[0].probe_error == "unauthorized"
     assert cands[0].w7_opus_pct is None
+
+
+# ---------------------------------------------------------------------------
+# limits array: model-scoped weekly windows (e.g. Fable's separate weekly cap)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_usage_response_scoped_limits() -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    body: dict = {
+        "five_hour": {"utilization": 9.0, "resets_at": None},
+        "seven_day": {"utilization": 31.0, "resets_at": None},
+        "seven_day_sonnet": None,
+        "seven_day_opus": None,
+        "extra_usage": None,
+        "limits": [
+            {"kind": "session", "group": "session", "percent": 9, "resets_at": None},
+            {"kind": "weekly_all", "group": "weekly", "percent": 31, "resets_at": None},
+            {
+                "kind": "weekly_scoped",
+                "group": "weekly",
+                "percent": 35,
+                "resets_at": "2026-07-03T21:59:59+00:00",
+                "scope": {"model": {"id": None, "display_name": "Fable"}, "surface": None},
+                "is_active": True,
+            },
+        ],
+    }
+    from datetime import UTC, datetime
+
+    reset_epoch = int(datetime(2026, 7, 3, 21, 59, 59, tzinfo=UTC).timestamp())
+    r = parse_usage_response(200, body, now=reset_epoch - 600)
+    assert r.w7_scoped == (ScopedLimit(label="fable", pct=35.0, reset_secs=600),)
+
+
+def test_parse_usage_response_scoped_limits_skips_incomplete_entries() -> None:
+    body: dict = {
+        "five_hour": {"utilization": 1.0, "resets_at": None},
+        "seven_day": {"utilization": 2.0, "resets_at": None},
+        "limits": [
+            # No percent → skipped
+            {"kind": "weekly_scoped", "scope": {"model": {"display_name": "Fable"}}},
+            # No scope label at all → skipped
+            {"kind": "weekly_scoped", "percent": 10, "scope": {"model": None, "surface": None}},
+            # Surface scope (no model) → label falls back to the surface
+            {"kind": "weekly_scoped", "percent": 20, "scope": {"model": None, "surface": "code"}},
+        ],
+    }
+    r = parse_usage_response(200, body, now=_NOW)
+    assert len(r.w7_scoped) == 1
+    assert r.w7_scoped[0].label == "code"
+    assert r.w7_scoped[0].pct == 20.0
+
+
+def test_parse_usage_response_no_limits_array() -> None:
+    """Older responses without a limits array → empty scoped tuple."""
+    body: dict = {
+        "five_hour": {"utilization": 1.0, "resets_at": None},
+        "seven_day": {"utilization": 2.0, "resets_at": None},
+    }
+    r = parse_usage_response(200, body, now=_NOW)
+    assert r.w7_scoped == ()
+
+
+def test_merge_opus_usage_carries_scoped_limits() -> None:
+    from claude_rotate.probe import merge_opus_usage
+    from claude_rotate.selection import ScopedLimit
+
+    base = ProbeResult(ok=True, http_code=200, h5_pct=10.0, w7_pct=20.0)
+    scoped = (ScopedLimit(label="fable", pct=35.0, reset_secs=600),)
+    oauth = ProbeResult(ok=True, http_code=200, w7_scoped=scoped)
+    assert merge_opus_usage(base, oauth).w7_scoped == scoped

@@ -47,6 +47,7 @@ from claude_rotate.insights import (
     status_line,
     warning_messages,
 )
+from claude_rotate.selection import ScopedLimit
 from claude_rotate.sessions import SessionLoad
 
 __all__ = [
@@ -135,6 +136,8 @@ class DashboardRow:
     # Recent burn (%-points/sec) for the recency-aware forecast; None -> average pace.
     h5_rate_per_sec: float | None = None
     w7_rate_per_sec: float | None = None
+    # Model-scoped weekly limits (e.g. Fable's separate weekly cap); display-only.
+    w7_scoped: tuple[ScopedLimit, ...] = ()
 
 
 class _RateSource(Protocol):
@@ -442,6 +445,20 @@ def _window_text(c: _WindowCell, *, bar_w: int, pw: int, cw: int, rw: int, label
     return t
 
 
+def _scoped_lines(row: DashboardRow, *, bar_w: int) -> Text:
+    """Compact model-scoped weekly lines (e.g. ``fable 35%``) for the week cell.
+
+    One dim line per scoped limit, appended beneath the week window's fact and
+    forecast lines. No bar or forecast — the scoped window shares the weekly
+    cadence, so the reset clock above already applies.
+    """
+    t = Text()
+    for s in row.w7_scoped:
+        t.append(f"\n{s.label} ", style="dim")
+        t.append(f"{s.pct:g}%", style=_pct_color(s.pct, width=bar_w))
+    return t
+
+
 def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) -> Text:
     """Two-line account label: markers + name, plan badge dimmed beneath."""
     name = row.account.name
@@ -563,6 +580,8 @@ def _render_table(
                 continue
             t5 = _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5)
             t7 = _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7)
+            if c7.pct is not None:
+                t7.append_text(_scoped_lines(row, bar_w=bar_w))
             if unusable:
                 table.add_row(_greyed(lbl), _greyed(t5), _greyed(t7), _greyed(sub))
             else:
@@ -635,6 +654,10 @@ def _card_text(
         line = _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
         card.append("\n")
         card.append_text(_greyed(line) if unusable else line)
+    if c7.pct is not None:
+        scoped = _scoped_lines(row, bar_w=_CARD_BAR_WIDTH)
+        if scoped.plain:
+            card.append_text(_greyed(scoped) if unusable else scoped)
     return card
 
 
@@ -815,6 +838,10 @@ def status_json(
                     expiry_horizon(r.account.effective_expires_at, r.w7_reset_secs, now),
                     r.w7_rate_per_sec,
                 ),
+                "w7_scoped": [
+                    {"label": s.label, "pct": s.pct, "reset_secs": s.reset_secs}
+                    for s in r.w7_scoped
+                ],
                 "status": r.status,
                 "note": r.note,
                 "from_cache": r.from_cache,

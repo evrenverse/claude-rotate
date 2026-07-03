@@ -31,8 +31,10 @@ as-is. Never fabricate numbers.
   rotator would pick next; `@>` = both (no rotation on the next launch).
 - **One fenced block per account** (narrow, no table borders, readable on a
   phone — each fence renders as its own card): a header with the account name and
-  days left on the subscription, then — per window (`5h` and `week`) — a *fact
-  line* and a *forecast sub-line* beneath it. The fact line carries a progress bar
+  days left on the subscription, then — per window (`5h`, `week`, and any
+  model-scoped weekly window like `fable`, which tracks that model's separate
+  weekly cap) — a *fact line* and a *forecast sub-line* beneath it. The fact
+  line carries a progress bar
   (`█`/`░`), the current usage % and the reset as an absolute clock (with a
   weekday when it lands on another day) plus a compact relative duration, e.g.
   `Thu 13:00 (4d 20h)`. The label-less sub-line carries the projection: the

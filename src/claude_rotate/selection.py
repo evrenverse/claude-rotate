@@ -34,6 +34,20 @@ _PLAN_RANKS: dict[str, int] = {
 
 
 @dataclass(frozen=True)
+class ScopedLimit:
+    """One model/surface-scoped weekly limit from the usage endpoint's ``limits`` array.
+
+    Introduced with Fable 5, whose weekly cap is tracked separately from the
+    unified weekly window. ``label`` is the lower-cased scope name (e.g.
+    ``"fable"``); ``reset_secs`` is seconds until this window resets.
+    """
+
+    label: str
+    pct: float
+    reset_secs: int
+
+
+@dataclass(frozen=True)
 class Candidate:
     """An account paired with its last-known usage numbers."""
 
@@ -46,6 +60,10 @@ class Candidate:
     # Opus 7d bucket from the OAuth usage endpoint; None when only the
     # inference rate-limit headers were available.
     w7_opus_pct: float | None = None
+    # Model-scoped weekly limits (e.g. Fable) — display-only, selection
+    # ignores them: a capped scoped window only blocks that model, not the
+    # account.
+    w7_scoped: tuple[ScopedLimit, ...] = ()
     # Weighted live-session load on this account (active + idle*idle_weight),
     # injected by run.py from the session registry. Bridges the probe's blind
     # window so a burst fans out instead of stampeding one account.
@@ -70,6 +88,7 @@ def candidate_from_account(
     probe_error: str = "",
     w7_opus_pct: float | None = None,
     session_load: float = 0.0,
+    w7_scoped: tuple[ScopedLimit, ...] = (),
 ) -> Candidate:
     return Candidate(
         account=account,
@@ -80,6 +99,7 @@ def candidate_from_account(
         probe_error=probe_error,
         w7_opus_pct=w7_opus_pct,
         session_load=session_load,
+        w7_scoped=w7_scoped,
     )
 
 

@@ -348,3 +348,39 @@ def test_report_shows_session_indicator() -> None:
     )
     out = build_report([row], chosen="matri", active=None, fenced=False)
     assert "2 active · 1 idle" in out
+
+
+def test_report_renders_scoped_weekly_line() -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    row = DashboardRow(
+        account=_account("matri"),
+        h5_pct=9.0,
+        w7_pct=31.0,
+        h5_reset_secs=4 * _HOUR,
+        w7_reset_secs=1 * _DAY,
+        w7_scoped=(ScopedLimit(label="fable", pct=35.0, reset_secs=1 * _DAY),),
+    )
+    report = build_report([row], chosen="matri", active="matri", now=NOW)
+    block = next(b for b in _blocks(report) if "matri" in b[0])
+    fable_fact = next(ln for ln in block if ln.lstrip().startswith("fable"))
+    # Full fact line: bar, current %, reset clock — same grid as 5h/week.
+    assert "35%" in fable_fact
+    assert "█" in fable_fact or "░" in fable_fact
+    assert ":" in fable_fact
+    # The week line is still present and aligned to the same clock column.
+    week_fact = next(ln for ln in block if ln.lstrip().startswith("week"))
+    assert week_fact.index(":") == fable_fact.index(":")
+
+
+def test_report_without_scoped_limits_unchanged() -> None:
+    row = DashboardRow(
+        account=_account("matri"),
+        h5_pct=9.0,
+        w7_pct=31.0,
+        h5_reset_secs=4 * _HOUR,
+        w7_reset_secs=1 * _DAY,
+    )
+    report = build_report([row], chosen="matri", active="matri", now=NOW)
+    block = next(b for b in _blocks(report) if "matri" in b[0])
+    assert not any(ln.lstrip().startswith("fable") for ln in block)

@@ -148,3 +148,49 @@ def test_load_clamps_opus_pct_when_weekly_reset_elapsed(
     loaded = cache.load("main")
     assert loaded is not None
     assert loaded.w7_opus_pct == 0.0
+
+
+def test_roundtrip_preserves_scoped_limits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    r = ProbeResult(
+        ok=True,
+        http_code=200,
+        h5_pct=5.0,
+        w7_pct=50.0,
+        h5_reset_secs=3600,
+        w7_reset_secs=86400,
+        w7_scoped=(ScopedLimit(label="fable", pct=35.0, reset_secs=86400),),
+    )
+    cache.save("main", r)
+
+    monkeypatch.setattr(time, "time", lambda: 1_060.0)
+    loaded = cache.load("main")
+    assert loaded is not None
+    assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=35.0, reset_secs=86340),)
+
+
+def test_load_clamps_scoped_pct_when_its_reset_elapsed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    r = ProbeResult(
+        ok=True,
+        http_code=200,
+        h5_pct=50.0,
+        w7_pct=90.0,
+        h5_reset_secs=60,
+        w7_reset_secs=7200,
+        w7_scoped=(ScopedLimit(label="fable", pct=95.0, reset_secs=120),),
+    )
+    cache.save("main", r)
+
+    monkeypatch.setattr(time, "time", lambda: 1_500.0)
+    loaded = cache.load("main")
+    assert loaded is not None
+    assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=0.0, reset_secs=0),)
