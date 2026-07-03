@@ -12,6 +12,7 @@ import os
 import tempfile
 import time
 from pathlib import Path
+from typing import Any
 
 from claude_rotate.config import (
     USAGE_HISTORY_MAX_POINTS,
@@ -38,13 +39,42 @@ class UsageCache:
     def _history_path(self, name: str) -> Path:
         return self._paths.usage_dir / f"{name}.history.json"
 
-    def load(self, name: str) -> ProbeResult | None:
+    def _read_raw(self, name: str) -> dict[str, Any] | None:
         path = self._path_for(name)
         if not path.exists():
             return None
         try:
             raw = json.loads(path.read_text())
         except (json.JSONDecodeError, OSError):
+            return None
+        return raw if isinstance(raw, dict) else None
+
+    def load_scoped(self, name: str) -> tuple[ScopedLimit, ...]:
+        """Last known model-scoped weekly limits, kept until their own reset.
+
+        Unlike ``load``, this ignores MAX_CACHE_AGE: a scoped weekly limit only
+        moves through the account's own usage, so the last fetched value stays a
+        valid lower bound until the window resets. Used to backfill a probe
+        whose OAuth usage fetch failed (the endpoint rate-limits aggressively).
+        """
+        raw = self._read_raw(name)
+        if raw is None:
+            return ()
+        now = time.time()
+        scoped: list[ScopedLimit] = []
+        for entry in raw.get("w7_scoped") or []:
+            if not isinstance(entry, list) or len(entry) != 3:
+                continue
+            label, pct, reset_at = entry
+            secs = max(0, int(float(reset_at) - now))
+            if secs == 0:
+                continue  # window elapsed — the scoped usage has reset
+            scoped.append(ScopedLimit(label=str(label), pct=float(pct), reset_secs=secs))
+        return tuple(scoped)
+
+    def load(self, name: str) -> ProbeResult | None:
+        raw = self._read_raw(name)
+        if raw is None:
             return None
 
         now = time.time()
@@ -107,6 +137,17 @@ class UsageCache:
             return
         self._paths.usage_dir.mkdir(parents=True, exist_ok=True)
         now = time.time()
+        scoped = [[s.label, s.pct, now + s.reset_secs] for s in result.w7_scoped]
+        if not scoped:
+            # An empty result usually means the OAuth usage fetch failed (429),
+            # not that the limits vanished — keep the last known entries until
+            # their own reset elapses instead of clobbering them.
+            prev = self._read_raw(name) or {}
+            scoped = [
+                e
+                for e in prev.get("w7_scoped") or []
+                if isinstance(e, list) and len(e) == 3 and float(e[2]) > now
+            ]
         payload = {
             "probed_at": now,
             "http_code": result.http_code,
@@ -115,7 +156,7 @@ class UsageCache:
             "w7_opus_pct": result.w7_opus_pct,
             "h5_reset_at": now + result.h5_reset_secs,
             "w7_reset_at": now + result.w7_reset_secs,
-            "w7_scoped": [[s.label, s.pct, now + s.reset_secs] for s in result.w7_scoped],
+            "w7_scoped": scoped,
         }
         self._atomic_write(self._path_for(name), payload)
         self._append_history(name, now, result.h5_pct, result.w7_pct)
