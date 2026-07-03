@@ -8,8 +8,10 @@ vertically so a phone-width terminal still reads as a table. Accounts that
 cannot be picked right now — a
 window at/over the limit or an expired subscription — render flattened to
 uniform grey (``is_unusable`` + ``_greyed``) so the eye skips them. Each window
-(5h / week) renders a *fact line* (bar, usage %, reset clock + relative
-duration) and a dimmed *forecast sub-line* (projected % at reset and, when
+(5h / week, plus any model-scoped weekly window such as Fable's own cap,
+rendered as a dim-labelled line beneath week) renders a *fact line* (bar,
+usage %, reset clock + relative duration) and a dimmed *forecast sub-line*
+(projected % at reset and, when
 the limit is crossed before reset, the clock at which usage hits 100%).
 Shared quota semantics (forecasts, warnings, wording) live in
 ``claude_rotate.insights`` and are reused by the ``--report`` renderer.
@@ -332,22 +334,31 @@ class _WindowCell:
 _NA_CELL = _WindowCell(None, "N/A", "", "", None, "", None, "", "")
 
 
-def _window_cells(
-    rows: list[DashboardRow],
-    window: str,
-    window_secs: int,
-    *,
-    now_local: datetime,
-    show_forecast: bool,
-) -> list[_WindowCell]:
-    """Build one column of cells; the weekday slot is shared per column."""
-    datas: list[tuple[float | None, int, bool, int | None, float | None]] = []
+_WindowData = tuple[float | None, int, bool, int | None, float | None]
+
+
+def _window_datas(
+    rows: list[DashboardRow], window: str, *, now_local: datetime
+) -> list[_WindowData]:
+    """(pct, secs, from_cache, horizon, rate) per row for one window."""
+    datas: list[_WindowData] = []
     for r in rows:
         pct = r.h5_pct if window == "5h" else r.w7_pct
         secs = r.h5_reset_secs if window == "5h" else r.w7_reset_secs
         rate = r.h5_rate_per_sec if window == "5h" else r.w7_rate_per_sec
         horizon_arg = expiry_horizon(r.account.effective_expires_at, secs, now_local)
         datas.append((pct if r.status == "ok" else None, secs, r.from_cache, horizon_arg, rate))
+    return datas
+
+
+def _cells_from_datas(
+    datas: list[_WindowData],
+    window_secs: int,
+    *,
+    now_local: datetime,
+    show_forecast: bool,
+) -> list[_WindowCell]:
+    """Build cells from window datas; the weekday slot is shared across the batch."""
 
     def lands_on_other_day(secs: int) -> bool:
         return (now_local + timedelta(seconds=max(secs, 0))).date() != now_local.date()
@@ -399,6 +410,55 @@ def _window_cells(
     return cells
 
 
+def _window_cells(
+    rows: list[DashboardRow],
+    window: str,
+    window_secs: int,
+    *,
+    now_local: datetime,
+    show_forecast: bool,
+) -> list[_WindowCell]:
+    """Build one column of cells; the weekday slot is shared per column."""
+    return _cells_from_datas(
+        _window_datas(rows, window, now_local=now_local),
+        window_secs,
+        now_local=now_local,
+        show_forecast=show_forecast,
+    )
+
+
+def _week_and_scoped_cells(
+    rows: list[DashboardRow], *, now_local: datetime, show_forecast: bool
+) -> tuple[list[_WindowCell], list[list[tuple[str, _WindowCell]]]]:
+    """Week cells plus per-row ``(label, cell)`` scoped cells (e.g. Fable's weekly cap).
+
+    Built in one batch so the week line and the scoped lines beneath it share
+    the column's weekday slot and column grid. Scoped windows have no
+    burn-rate history, so their forecast falls back to the average-pace
+    projection (rate=None) — same as the ``--report`` renderer.
+    """
+    scoped_datas: list[_WindowData] = [
+        (
+            s.pct if r.status == "ok" else None,
+            s.reset_secs,
+            r.from_cache,
+            expiry_horizon(r.account.effective_expires_at, s.reset_secs, now_local),
+            None,
+        )
+        for r in rows
+        for s in r.w7_scoped
+    ]
+    cells = _cells_from_datas(
+        _window_datas(rows, "week", now_local=now_local) + scoped_datas,
+        FORECAST_WINDOW_7D_SECONDS,
+        now_local=now_local,
+        show_forecast=show_forecast,
+    )
+    it = iter(cells[len(rows) :])
+    scoped = [[(s.label, next(it)) for s in r.w7_scoped] for r in rows]
+    return cells[: len(rows)], scoped
+
+
 def _col_widths(cells: list[_WindowCell], *, include_rel: bool) -> tuple[int, int, int]:
     """(pct, clock, rel) column widths shared by fact line and sub-line."""
     pw = max((len(s) for c in cells for s in (c.pct_str, c.fc_str) if s), default=3)
@@ -409,11 +469,20 @@ def _col_widths(cells: list[_WindowCell], *, include_rel: bool) -> tuple[int, in
     return pw, cw, rw
 
 
-def _window_text(c: _WindowCell, *, bar_w: int, pw: int, cw: int, rw: int, label: str = "") -> Text:
+def _window_text(
+    c: _WindowCell,
+    *,
+    bar_w: int,
+    pw: int,
+    cw: int,
+    rw: int,
+    label: str = "",
+    label_style: str = "",
+) -> Text:
     """Fact line + optional forecast sub-line for one window cell."""
     t = Text()
     if label:
-        t.append(label)
+        t.append(label, style=label_style)
     if c.pct is None:
         t.append("N/A", style="grey50")
         return t
@@ -445,18 +514,37 @@ def _window_text(c: _WindowCell, *, bar_w: int, pw: int, cw: int, rw: int, label
     return t
 
 
-def _scoped_lines(row: DashboardRow, *, bar_w: int) -> Text:
-    """Compact model-scoped weekly lines (e.g. ``fable 35%``) for the week cell.
+def _scoped_label_width(scoped: list[list[tuple[str, _WindowCell]]]) -> int:
+    """Width of the dim label prefix (longest scoped label + a space); 0 when none."""
+    return max((len(lbl) + 1 for per_row in scoped for lbl, _ in per_row), default=0)
 
-    One dim line per scoped limit, appended beneath the week window's fact and
-    forecast lines. No bar or forecast — the scoped window shares the weekly
-    cadence, so the reset clock above already applies.
-    """
-    t = Text()
-    for s in row.w7_scoped:
-        t.append(f"\n{s.label} ", style="dim")
-        t.append(f"{s.pct:g}%", style=_pct_color(s.pct, width=bar_w))
-    return t
+
+def _append_scoped_lines(
+    t: Text,
+    scoped_row: list[tuple[str, _WindowCell]],
+    *,
+    bar_w: int,
+    pw: int,
+    cw: int,
+    rw: int,
+    label_w: int,
+) -> None:
+    """Full fact + forecast lines per scoped limit, beneath the week lines."""
+    for lbl, sc in scoped_row:
+        if sc.pct is None:
+            continue
+        t.append("\n")
+        t.append_text(
+            _window_text(
+                sc,
+                bar_w=bar_w,
+                pw=pw,
+                cw=cw,
+                rw=rw,
+                label=lbl.ljust(label_w),
+                label_style="dim",
+            )
+        )
 
 
 def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) -> Text:
@@ -531,9 +619,9 @@ def _render_table(
     cells5 = _window_cells(
         rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
-    cells7 = _window_cells(
-        rows, "week", FORECAST_WINDOW_7D_SECONDS, now_local=now_local, show_forecast=show_forecast
-    )
+    cells7, scoped7 = _week_and_scoped_cells(rows, now_local=now_local, show_forecast=show_forecast)
+    flat_scoped = [c for per_row in scoped7 for _, c in per_row]
+    label7_w = _scoped_label_width(scoped7)
     labels = [_label_text(r, chosen=chosen, active=active) for r in rows]
     subs = [_sub_text(r, now=now) for r in rows]
     label_w = max((max(len(ln) for ln in lbl.plain.split("\n")) for lbl in labels), default=0)
@@ -542,14 +630,16 @@ def _render_table(
 
     for include_rel in (True, False):
         pw5, cw5, rw5 = _col_widths(cells5, include_rel=include_rel)
-        pw7, cw7, rw7 = _col_widths(cells7, include_rel=include_rel)
+        pw7, cw7, rw7 = _col_widths(cells7 + flat_scoped, include_rel=include_rel)
 
         def text_w(pw: int, cw: int, rw: int) -> int:
             return 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0)
 
         # Bordered-table chrome: 5 vertical rules + 4 columns x 2 padding cells.
         chrome = 5 + 4 * 2
-        overhead = label_w + sub_w + chrome + text_w(pw5, cw5, rw5) + text_w(pw7, cw7, rw7)
+        overhead = (
+            label_w + sub_w + chrome + text_w(pw5, cw5, rw5) + text_w(pw7, cw7, rw7) + label7_w
+        )
         slack = (console.width - overhead) // 2
         if slack < _BAR_MIN:
             continue
@@ -566,7 +656,9 @@ def _render_table(
         table.add_column("5h", no_wrap=True)
         table.add_column("week", no_wrap=True)
         table.add_column("sub", no_wrap=True, justify="right")
-        for row, lbl, c5, c7, sub in zip(rows, labels, cells5, cells7, subs, strict=True):
+        for row, lbl, c5, c7, sc7, sub in zip(
+            rows, labels, cells5, cells7, scoped7, subs, strict=True
+        ):
             unusable = is_unusable(row, now=now)
             if row.status in _STATUS_LABELS:
                 # The status label stays loud even when the row is greyed out —
@@ -579,9 +671,10 @@ def _render_table(
                 )
                 continue
             t5 = _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5)
-            t7 = _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7)
+            # Blank prefix keeps the week bar aligned with labelled scoped bars.
+            t7 = _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7, label=" " * label7_w)
             if c7.pct is not None:
-                t7.append_text(_scoped_lines(row, bar_w=bar_w))
+                _append_scoped_lines(t7, sc7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7, label_w=label7_w)
             if unusable:
                 table.add_row(_greyed(lbl), _greyed(t5), _greyed(t7), _greyed(sub))
             else:
@@ -596,6 +689,7 @@ def _card_text(
     row: DashboardRow,
     c5: _WindowCell,
     c7: _WindowCell,
+    scoped: list[tuple[str, _WindowCell]],
     *,
     chosen: str | None,
     active: str | None,
@@ -646,18 +740,26 @@ def _card_text(
         card.append_text(_status_text(row))
         return card
 
-    both = [c5, c7]
-    pw = max((len(s) for c in both for s in (c.pct_str, c.fc_str) if s), default=3)
-    cw = max((len(s) for c in both for s in (c.clock, c.eta_clock) if s), default=0)
-    rw = max((len(s) for c in both for s in (c.rel, c.eta_rel) if s), default=0)
-    for label, cell in (("5h    ", c5), ("week  ", c7)):
-        line = _window_text(cell, bar_w=_CARD_BAR_WIDTH, pw=pw, cw=cw, rw=rw, label=label)
+    windows: list[tuple[str, _WindowCell]] = [("5h", c5), ("week", c7)]
+    if c7.pct is not None:
+        windows += [(lbl, sc) for lbl, sc in scoped if sc.pct is not None]
+    cells = [c for _, c in windows]
+    pw = max((len(s) for c in cells for s in (c.pct_str, c.fc_str) if s), default=3)
+    cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
+    rw = max((len(s) for c in cells for s in (c.rel, c.eta_rel) if s), default=0)
+    label_w = max(len(lbl) for lbl, _ in windows) + 2
+    for label, cell in windows:
+        line = _window_text(
+            cell,
+            bar_w=_CARD_BAR_WIDTH,
+            pw=pw,
+            cw=cw,
+            rw=rw,
+            label=label.ljust(label_w),
+            label_style="dim" if label not in ("5h", "week") else "",
+        )
         card.append("\n")
         card.append_text(_greyed(line) if unusable else line)
-    if c7.pct is not None:
-        scoped = _scoped_lines(row, bar_w=_CARD_BAR_WIDTH)
-        if scoped.plain:
-            card.append_text(_greyed(scoped) if unusable else scoped)
     return card
 
 
@@ -681,9 +783,7 @@ def _render_cards(
     cells5 = _window_cells(
         rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
-    cells7 = _window_cells(
-        rows, "week", FORECAST_WINDOW_7D_SECONDS, now_local=now_local, show_forecast=show_forecast
-    )
+    cells7, scoped7 = _week_and_scoped_cells(rows, now_local=now_local, show_forecast=show_forecast)
     table = Table(
         box=box.ROUNDED,
         show_lines=True,  # rule between accounts — each card reads as its own band
@@ -692,10 +792,10 @@ def _render_cards(
         border_style="dim",
     )
     table.add_column("", no_wrap=True)
-    for row, c5, c7 in zip(rows, cells5, cells7, strict=True):
+    for row, c5, c7, sc7 in zip(rows, cells5, cells7, scoped7, strict=True):
         unusable = is_unusable(row, now=now)
         table.add_row(
-            _card_text(row, c5, c7, chosen=chosen, active=active, now=now, unusable=unusable)
+            _card_text(row, c5, c7, sc7, chosen=chosen, active=active, now=now, unusable=unusable)
         )
     console.print()
     console.print(table)

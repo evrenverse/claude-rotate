@@ -967,3 +967,40 @@ def test_status_json_includes_scoped_limits() -> None:
     assert payload["accounts"][0]["w7_scoped"] == [
         {"label": "fable", "pct": 35.0, "reset_secs": 600}
     ]
+
+
+def _scoped_row(name: str = "main") -> DashboardRow:
+    from claude_rotate.selection import ScopedLimit
+
+    return DashboardRow(
+        account=_acc(name),
+        h5_pct=42.0,
+        w7_pct=61.0,
+        h5_reset_secs=7200,
+        w7_reset_secs=4 * 86400,
+        w7_scoped=(ScopedLimit(label="fable", pct=35.0, reset_secs=3 * 86400),),
+    )
+
+
+def test_wide_table_renders_scoped_limit_as_full_window_line() -> None:
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=140)
+    render_dashboard([_scoped_row()], chosen="main", console=console)
+    out = console.file.getvalue()
+    fable_line = next(ln for ln in out.splitlines() if "fable" in ln)
+    # Full fact line like week: bar glyphs, current %, and a reset clock.
+    assert "█" in fable_line and "░" in fable_line
+    assert "35%" in fable_line
+    assert ":" in fable_line  # reset clock
+    # Forecast sub-line beneath (average-pace projection, rate=None).
+    following = out.splitlines()[out.splitlines().index(fable_line) + 1]
+    assert "→" in following
+
+
+def test_cards_render_scoped_limit_as_full_window_line() -> None:
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=60)
+    render_dashboard([_scoped_row()], chosen="main", console=console)
+    out = console.file.getvalue()
+    fable_line = next(ln for ln in out.splitlines() if "fable" in ln)
+    assert "█" in fable_line and "░" in fable_line
+    assert "35%" in fable_line
+    assert ":" in fable_line
