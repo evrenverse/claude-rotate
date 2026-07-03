@@ -20,7 +20,7 @@ from claude_rotate.config import (
     USAGE_URL,
     USER_AGENT,
 )
-from claude_rotate.selection import Candidate, candidate_from_account
+from claude_rotate.selection import Candidate, ScopedLimit, candidate_from_account
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,8 @@ class ProbeResult:
     # Extended fields from the OAuth usage endpoint when available.
     w7_sonnet_pct: float | None = None
     w7_opus_pct: float | None = None
+    # Model-scoped weekly limits from the ``limits`` array (e.g. Fable).
+    w7_scoped: tuple[ScopedLimit, ...] = ()
     extra_usage_enabled: bool = False
     error: str = ""
     request_id: str | None = None
@@ -143,6 +145,25 @@ def parse_usage_response(http_code: int, body: dict[str, Any], *, now: int) -> P
     opus = body.get("seven_day_opus") or {}
     extra = body.get("extra_usage") or {}
 
+    # The ``limits`` array (added with Fable 5) carries model-scoped weekly
+    # windows the legacy top-level buckets don't: kind=weekly_scoped entries
+    # with a model (or surface) scope, e.g. Fable's separate weekly cap.
+    scoped: list[ScopedLimit] = []
+    for entry in body.get("limits") or []:
+        if entry.get("kind") != "weekly_scoped" or entry.get("percent") is None:
+            continue
+        scope = entry.get("scope") or {}
+        label = (scope.get("model") or {}).get("display_name") or scope.get("surface")
+        if not label:
+            continue
+        scoped.append(
+            ScopedLimit(
+                label=str(label).lower(),
+                pct=float(entry["percent"]),
+                reset_secs=_secs_until(entry.get("resets_at")),
+            )
+        )
+
     return ProbeResult(
         ok=True,
         http_code=http_code,
@@ -152,6 +173,7 @@ def parse_usage_response(http_code: int, body: dict[str, Any], *, now: int) -> P
         w7_reset_secs=_secs_until(seven.get("resets_at")),
         w7_sonnet_pct=float(sonnet["utilization"]) if sonnet and "utilization" in sonnet else None,
         w7_opus_pct=float(opus["utilization"]) if opus and "utilization" in opus else None,
+        w7_scoped=tuple(scoped),
         extra_usage_enabled=bool(extra.get("is_enabled", False)),
     )
 
@@ -197,6 +219,7 @@ def merge_opus_usage(base: ProbeResult, oauth: ProbeResult | None) -> ProbeResul
         base,
         w7_sonnet_pct=oauth.w7_sonnet_pct,
         w7_opus_pct=oauth.w7_opus_pct,
+        w7_scoped=oauth.w7_scoped,
         extra_usage_enabled=oauth.extra_usage_enabled,
     )
 
@@ -231,6 +254,7 @@ def probe_many(accounts: list[Account]) -> list[Candidate]:
                     w7_reset_secs=result.w7_reset_secs,
                     probe_error="",
                     w7_opus_pct=result.w7_opus_pct,
+                    w7_scoped=result.w7_scoped,
                 )
             )
         else:

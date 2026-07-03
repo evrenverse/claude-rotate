@@ -947,3 +947,23 @@ def test_status_json_forecast_is_expiry_capped() -> None:
     row_late = _row(acc_late, w7_pct=37.0, w7_secs=492480)
     data_late = status_json([row_late], chosen="spir", active="spir", now=now)
     assert data_late["accounts"][0]["w7_forecast_pct"] == 199
+
+
+def test_status_json_includes_scoped_limits() -> None:
+    from claude_rotate.dashboard import status_json
+    from claude_rotate.selection import ScopedLimit
+
+    rows = [
+        DashboardRow(
+            account=_acc("main"),
+            h5_pct=6.0,
+            w7_pct=31.0,
+            h5_reset_secs=3600,
+            w7_reset_secs=86400,
+            w7_scoped=(ScopedLimit(label="fable", pct=35.0, reset_secs=600),),
+        )
+    ]
+    payload = status_json(rows, chosen="main")
+    assert payload["accounts"][0]["w7_scoped"] == [
+        {"label": "fable", "pct": 35.0, "reset_secs": 600}
+    ]
