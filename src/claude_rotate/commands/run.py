@@ -233,7 +233,10 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                     w7_pct=c.w7_pct,
                     h5_reset_secs=c.h5_reset_secs,
                     w7_reset_secs=c.w7_reset_secs,
-                    w7_scoped=c.w7_scoped,
+                    # The OAuth usage fetch behind scoped limits rate-limits
+                    # hard; backfill from the cache (save above preserved the
+                    # last known value) rather than hiding them.
+                    w7_scoped=c.w7_scoped or cache.load_scoped(c.account.name),
                 )
             )
         resolved.append(c)

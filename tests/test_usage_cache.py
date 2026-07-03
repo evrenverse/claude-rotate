@@ -194,3 +194,84 @@ def test_load_clamps_scoped_pct_when_its_reset_elapsed(
     loaded = cache.load("main")
     assert loaded is not None
     assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=0.0, reset_secs=0),)
+
+
+def _probe(scoped: tuple = (), **kw) -> ProbeResult:
+    defaults = dict(
+        ok=True, http_code=200, h5_pct=5.0, w7_pct=50.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+    defaults.update(kw)
+    return ProbeResult(w7_scoped=scoped, **defaults)
+
+
+def test_save_with_empty_scoped_keeps_last_known_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=86400),)))
+
+    # Next probe's OAuth usage fetch failed (429) -> empty scoped tuple.
+    monkeypatch.setattr(time, "time", lambda: 1_100.0)
+    cache.save("main", _probe())
+
+    loaded = cache.load("main")
+    assert loaded is not None
+    assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=57.0, reset_secs=86300),)
+
+
+def test_save_with_empty_scoped_drops_elapsed_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=60),)))
+
+    # The scoped window reset in the meantime — the stale value must not survive.
+    monkeypatch.setattr(time, "time", lambda: 2_000.0)
+    cache.save("main", _probe())
+    assert cache.load("main").w7_scoped == ()
+
+
+def test_save_with_fresh_scoped_overwrites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=86400),)))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=60.0, reset_secs=86400),)))
+    assert cache.load("main").w7_scoped[0].pct == 60.0
+
+
+def test_load_scoped_ignores_max_cache_age(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=86400),)))
+
+    # Way past MAX_CACHE_AGE: load() refuses, load_scoped() still serves the
+    # value because it stays valid until its own weekly reset.
+    monkeypatch.setattr(time, "time", lambda: 1_000.0 + 3600.0)
+    assert cache.load("main") is None
+    assert cache.load_scoped("main") == (
+        ScopedLimit(label="fable", pct=57.0, reset_secs=86400 - 3600),
+    )
+
+
+def test_load_scoped_drops_elapsed_and_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    cache = UsageCache(make_paths(tmp_path))
+    assert cache.load_scoped("missing") == ()
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=60),)))
+    monkeypatch.setattr(time, "time", lambda: 2_000.0)
+    assert cache.load_scoped("main") == ()

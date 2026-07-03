@@ -124,6 +124,7 @@ def _collect(paths: Paths) -> _Collected:
                         w7_pct=cached.w7_pct,
                         h5_reset_secs=cached.h5_reset_secs,
                         w7_reset_secs=cached.w7_reset_secs,
+                        w7_scoped=cached.w7_scoped,
                     )
                     rows.append(
                         DashboardRow(
@@ -133,6 +134,7 @@ def _collect(paths: Paths) -> _Collected:
                             h5_reset_secs=c.h5_reset_secs,
                             w7_reset_secs=c.w7_reset_secs,
                             from_cache=True,
+                            w7_scoped=c.w7_scoped,
                         )
                     )
                     resolved.append(c)
@@ -158,6 +160,7 @@ def _collect(paths: Paths) -> _Collected:
                         w7_pct=cached.w7_pct,
                         h5_reset_secs=cached.h5_reset_secs,
                         w7_reset_secs=cached.w7_reset_secs,
+                        w7_scoped=cached.w7_scoped,
                     )
                     rows.append(
                         DashboardRow(
@@ -167,6 +170,7 @@ def _collect(paths: Paths) -> _Collected:
                             h5_reset_secs=c.h5_reset_secs,
                             w7_reset_secs=c.w7_reset_secs,
                             from_cache=True,
+                            w7_scoped=c.w7_scoped,
                         )
                     )
                     resolved.append(c)
@@ -192,6 +196,7 @@ def _collect(paths: Paths) -> _Collected:
                         w7_pct=cached.w7_pct,
                         h5_reset_secs=cached.h5_reset_secs,
                         w7_reset_secs=cached.w7_reset_secs,
+                        w7_scoped=cached.w7_scoped,
                     )
                     rows.append(
                         DashboardRow(
@@ -201,6 +206,7 @@ def _collect(paths: Paths) -> _Collected:
                             h5_reset_secs=c.h5_reset_secs,
                             w7_reset_secs=c.w7_reset_secs,
                             from_cache=True,
+                            w7_scoped=c.w7_scoped,
                         )
                     )
                     resolved.append(c)
@@ -261,7 +267,9 @@ def _collect(paths: Paths) -> _Collected:
                 w7_pct=c.w7_pct,
                 h5_reset_secs=c.h5_reset_secs,
                 w7_reset_secs=c.w7_reset_secs,
-                w7_scoped=c.w7_scoped,
+                # The OAuth usage fetch behind scoped limits rate-limits hard;
+                # backfill from the last cached value rather than hiding them.
+                w7_scoped=c.w7_scoped or cache.load_scoped(c.account.name),
             )
         )
         resolved.append(c)
