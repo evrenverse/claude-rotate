@@ -40,11 +40,19 @@ class ScopedLimit:
     Introduced with Fable 5, whose weekly cap is tracked separately from the
     unified weekly window. ``label`` is the lower-cased scope name (e.g.
     ``"fable"``); ``reset_secs`` is seconds until this window resets.
+
+    ``stale`` marks a value backfilled from the usage cache rather than fetched
+    by this probe — the OAuth usage endpoint rate-limits aggressively, so
+    backfills are common and can be hours old. ``age_secs`` is how long ago the
+    value was actually fetched, when known (``None`` for live values and for
+    legacy cache entries that predate the fetch timestamp).
     """
 
     label: str
     pct: float
     reset_secs: int
+    stale: bool = False
+    age_secs: int | None = None
 
 
 @dataclass(frozen=True)

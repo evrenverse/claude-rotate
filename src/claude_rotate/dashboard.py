@@ -441,7 +441,9 @@ def _week_and_scoped_cells(
         (
             s.pct if r.status == "ok" else None,
             s.reset_secs,
-            r.from_cache,
+            # A scoped value can be a cache backfill even when the row's
+            # unified numbers are live — mark it stale (``~``) either way.
+            r.from_cache or s.stale,
             expiry_horizon(r.account.effective_expires_at, s.reset_secs, now_local),
             None,
         )
@@ -939,7 +941,13 @@ def status_json(
                     r.w7_rate_per_sec,
                 ),
                 "w7_scoped": [
-                    {"label": s.label, "pct": s.pct, "reset_secs": s.reset_secs}
+                    {
+                        "label": s.label,
+                        "pct": s.pct,
+                        "reset_secs": s.reset_secs,
+                        "stale": s.stale,
+                        "age_secs": s.age_secs,
+                    }
                     for s in r.w7_scoped
                 ],
                 "status": r.status,

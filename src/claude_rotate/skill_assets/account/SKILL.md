@@ -37,7 +37,9 @@ as-is. Never fabricate numbers.
   line carries a progress bar
   (`█`/`░`), the current usage % and the reset as an absolute clock (with a
   weekday when it lands on another day) plus a compact relative duration, e.g.
-  `Thu 13:00 (4d 20h)`. The label-less sub-line carries the projection: the
+  `Thu 13:00 (4d 20h)`. A `~` before the % (e.g. `~88%`) marks a cached
+  last-known value — the live fetch failed, so treat it as a lower bound, not
+  the current usage. The label-less sub-line carries the projection: the
   `→`-prefixed forecast % and, when the limit is crossed before reset, the clock
   and relative duration at which usage hits 100% — shown as `→XX% —` when the
   window resets first, a lone `—` when there is no trend yet, or `reached` once

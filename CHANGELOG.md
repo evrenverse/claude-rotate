@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Cache-backfilled model-scoped limits no longer masquerade as fresh data.**
+  When the OAuth usage fetch fails (it rate-limits aggressively), the scoped
+  weekly lines (e.g. Fable) are backfilled from the usage cache — previously
+  with no indication, so a value could be hours old while the real limit was
+  already reached. Cache entries now store the value's `fetched_at`; backfilled
+  values are marked stale and render with the existing `~` cache marker in the
+  dashboard and `status --report` (legend updated), and `--json` gains
+  per-scoped-entry `stale` / `age_secs` fields. Legacy 3-element cache entries
+  load as stale with unknown age.
+
 ## [0.5.0] - 2026-06-14
 
 ### Added

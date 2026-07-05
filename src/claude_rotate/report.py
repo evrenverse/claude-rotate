@@ -20,7 +20,9 @@ Two markers identify accounts:
 
 Within each account block, every window (``5h`` and ``week``) spans two lines.
 The *fact line* aligns the progress bar, the current usage ``%`` and the reset
-(absolute clock + compact relative duration). The label-less *forecast sub-line*
+(absolute clock + compact relative duration). A ``~`` before the ``%`` marks a
+cached last-known value (the live fetch failed) — same convention as the
+dashboard's cache-served rows. The label-less *forecast sub-line*
 beneath it carries the projection: the forecast ``%`` and, once the limit is
 crossed before reset, the clock and relative duration at which usage hits 100%.
 Both lines share one column grid, so the forecast ``%`` stacks under the current
@@ -124,19 +126,35 @@ def _render_cards(
             head += f" · {indicator}"
 
         specs = (
-            ("5h", row.h5_pct, row.h5_reset_secs, FORECAST_WINDOW_5H_SECONDS, row.h5_rate_per_sec),
+            (
+                "5h",
+                row.h5_pct,
+                row.h5_reset_secs,
+                FORECAST_WINDOW_5H_SECONDS,
+                row.h5_rate_per_sec,
+                row.from_cache,
+            ),
             (
                 "week",
                 row.w7_pct,
                 row.w7_reset_secs,
                 FORECAST_WINDOW_7D_SECONDS,
                 row.w7_rate_per_sec,
+                row.from_cache,
             ),
             # Model-scoped weekly windows (e.g. Fable's own cap). No burn-rate
             # history is tracked for these, so the forecast falls back to the
-            # average-pace projection (rate=None).
+            # average-pace projection (rate=None). A scoped value can be a
+            # cache backfill even when the row is live — mark it stale then.
             *(
-                (s.label, s.pct, s.reset_secs, FORECAST_WINDOW_7D_SECONDS, None)
+                (
+                    s.label,
+                    s.pct,
+                    s.reset_secs,
+                    FORECAST_WINDOW_7D_SECONDS,
+                    None,
+                    row.from_cache or s.stale,
+                )
                 for s in row.w7_scoped
             ),
         )
@@ -154,11 +172,11 @@ def _render_cards(
             and _lands_on_other_day(
                 expiry_horizon(row.account.effective_expires_at, secs, now_utc) or secs
             )
-            for _, pct, secs, _, _ in specs
+            for _, pct, secs, _, _, _ in specs
         )
 
         cells: list[_Cell] = []
-        for label, pct, secs, window, rate in specs:
+        for label, pct, secs, window, rate, stale in specs:
             horizon_arg = expiry_horizon(row.account.effective_expires_at, secs, now_utc)
             capped = horizon_arg is not None
             forecast = compute_forecast(pct, secs, window, horizon_arg, rate)
@@ -180,11 +198,14 @@ def _render_cards(
                     eta_rel = rel_duration(eta)
                 else:
                     eta_clk, eta_rel = "—", ""
+            # ``~`` = cached last-known value (live fetch failed) — same
+            # marker the dashboard uses for cache-served rows.
+            marked_pct = f"~{pct_str(pct)}" if stale and pct is not None else pct_str(pct)
             cells.append(
                 _Cell(
                     label,
                     pct,
-                    pct_str(pct),
+                    marked_pct,
                     reset_clk,
                     reset_rel,
                     special,
@@ -274,7 +295,7 @@ def build_report(
 
     lines: list[str] = [
         "Legend: @ = running in this session, > = next pick (rotation), @> = both."
-        " Sub = days until subscription end.",
+        " Sub = days until subscription end. ~% = last known value (live fetch failed).",
         status_line(active, chosen),
         "",
     ]

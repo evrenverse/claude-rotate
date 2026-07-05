@@ -373,6 +373,30 @@ def test_report_renders_scoped_weekly_line() -> None:
     assert week_fact.index(":") == fable_fact.index(":")
 
 
+def test_report_marks_backfilled_scoped_limit_stale() -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    row = DashboardRow(
+        account=_account("matri"),
+        h5_pct=9.0,
+        w7_pct=31.0,
+        h5_reset_secs=4 * _HOUR,
+        w7_reset_secs=1 * _DAY,
+        w7_scoped=(
+            ScopedLimit(label="fable", pct=88.0, reset_secs=1 * _DAY, stale=True, age_secs=7200),
+        ),
+    )
+    report = build_report([row], chosen="matri", active="matri", now=NOW)
+    block = next(b for b in _blocks(report) if "matri" in b[0])
+    fable_fact = next(ln for ln in block if ln.lstrip().startswith("fable"))
+    # Backfilled value renders with the cache marker; live rows stay unmarked.
+    assert "~88%" in fable_fact
+    week_fact = next(ln for ln in block if ln.lstrip().startswith("week"))
+    assert "~" not in week_fact
+    # The legend explains the marker.
+    assert "~% = last known value" in report
+
+
 def test_report_without_scoped_limits_unchanged() -> None:
     row = DashboardRow(
         account=_account("matri"),

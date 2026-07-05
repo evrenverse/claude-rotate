@@ -965,7 +965,29 @@ def test_status_json_includes_scoped_limits() -> None:
     ]
     payload = status_json(rows, chosen="main")
     assert payload["accounts"][0]["w7_scoped"] == [
-        {"label": "fable", "pct": 35.0, "reset_secs": 600}
+        {"label": "fable", "pct": 35.0, "reset_secs": 600, "stale": False, "age_secs": None}
+    ]
+
+
+def test_status_json_marks_backfilled_scoped_limit_stale() -> None:
+    from claude_rotate.dashboard import status_json
+    from claude_rotate.selection import ScopedLimit
+
+    rows = [
+        DashboardRow(
+            account=_acc("main"),
+            h5_pct=6.0,
+            w7_pct=31.0,
+            h5_reset_secs=3600,
+            w7_reset_secs=86400,
+            w7_scoped=(
+                ScopedLimit(label="fable", pct=88.0, reset_secs=600, stale=True, age_secs=7200),
+            ),
+        )
+    ]
+    payload = status_json(rows, chosen="main")
+    assert payload["accounts"][0]["w7_scoped"] == [
+        {"label": "fable", "pct": 88.0, "reset_secs": 600, "stale": True, "age_secs": 7200}
     ]
 
 
@@ -1004,3 +1026,26 @@ def test_cards_render_scoped_limit_as_full_window_line() -> None:
     assert "█" in fable_line and "░" in fable_line
     assert "35%" in fable_line
     assert ":" in fable_line
+
+
+def test_wide_table_marks_backfilled_scoped_limit_stale() -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    row = DashboardRow(
+        account=_acc("main"),
+        h5_pct=42.0,
+        w7_pct=61.0,
+        h5_reset_secs=7200,
+        w7_reset_secs=4 * 86400,
+        w7_scoped=(
+            ScopedLimit(label="fable", pct=88.0, reset_secs=3 * 86400, stale=True, age_secs=7200),
+        ),
+    )
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=140)
+    render_dashboard([row], chosen="main", console=console)
+    out = console.file.getvalue()
+    fable_line = next(ln for ln in out.splitlines() if "fable" in ln)
+    # Backfilled value renders with the cache marker; the live rows don't.
+    assert "~88%" in fable_line
+    week_line = next(ln for ln in out.splitlines() if "61%" in ln)
+    assert "~61%" not in week_line
