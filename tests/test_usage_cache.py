@@ -169,7 +169,10 @@ def test_roundtrip_preserves_scoped_limits(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(time, "time", lambda: 1_060.0)
     loaded = cache.load("main")
     assert loaded is not None
-    assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=35.0, reset_secs=86340),)
+    # Cache-served scoped values are stale by definition and carry their age.
+    assert loaded.w7_scoped == (
+        ScopedLimit(label="fable", pct=35.0, reset_secs=86340, stale=True, age_secs=60),
+    )
 
 
 def test_load_clamps_scoped_pct_when_its_reset_elapsed(
@@ -193,7 +196,9 @@ def test_load_clamps_scoped_pct_when_its_reset_elapsed(
     monkeypatch.setattr(time, "time", lambda: 1_500.0)
     loaded = cache.load("main")
     assert loaded is not None
-    assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=0.0, reset_secs=0),)
+    assert loaded.w7_scoped == (
+        ScopedLimit(label="fable", pct=0.0, reset_secs=0, stale=True, age_secs=500),
+    )
 
 
 def _probe(scoped: tuple = (), **kw) -> ProbeResult:
@@ -219,7 +224,11 @@ def test_save_with_empty_scoped_keeps_last_known_value(
 
     loaded = cache.load("main")
     assert loaded is not None
-    assert loaded.w7_scoped == (ScopedLimit(label="fable", pct=57.0, reset_secs=86300),)
+    # The preserved value keeps its ORIGINAL fetch time (age 100s), not the
+    # newer probe's — that age is exactly what renderers flag as stale.
+    assert loaded.w7_scoped == (
+        ScopedLimit(label="fable", pct=57.0, reset_secs=86300, stale=True, age_secs=100),
+    )
 
 
 def test_save_with_empty_scoped_drops_elapsed_entries(
@@ -255,11 +264,12 @@ def test_load_scoped_ignores_max_cache_age(tmp_path: Path, monkeypatch: pytest.M
     cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=86400),)))
 
     # Way past MAX_CACHE_AGE: load() refuses, load_scoped() still serves the
-    # value because it stays valid until its own weekly reset.
+    # value because it stays valid until its own weekly reset — marked stale,
+    # with the time since it was actually fetched.
     monkeypatch.setattr(time, "time", lambda: 1_000.0 + 3600.0)
     assert cache.load("main") is None
     assert cache.load_scoped("main") == (
-        ScopedLimit(label="fable", pct=57.0, reset_secs=86400 - 3600),
+        ScopedLimit(label="fable", pct=57.0, reset_secs=86400 - 3600, stale=True, age_secs=3600),
     )
 
 
@@ -275,3 +285,43 @@ def test_load_scoped_drops_elapsed_and_missing(
     cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=60),)))
     monkeypatch.setattr(time, "time", lambda: 2_000.0)
     assert cache.load_scoped("main") == ()
+
+
+def test_load_scoped_legacy_entry_is_stale_with_unknown_age(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pre-``fetched_at`` cache files (3-element entries) load as stale, age unknown."""
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    paths = make_paths(tmp_path)
+    (paths.usage_dir).mkdir(parents=True)
+    (paths.usage_dir / "main.json").write_text(
+        json.dumps({"w7_scoped": [["fable", 88.0, 1_000.0 + 86400]]})
+    )
+    cache = UsageCache(paths)
+    assert cache.load_scoped("main") == (
+        ScopedLimit(label="fable", pct=88.0, reset_secs=86400, stale=True, age_secs=None),
+    )
+
+
+def test_save_preserves_fetch_age_across_repeated_failed_fetches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The original fetch time survives any number of backfill saves."""
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=86400),)))
+
+    # Two consecutive probes whose OAuth fetch failed -> scoped preserved.
+    monkeypatch.setattr(time, "time", lambda: 5_000.0)
+    cache.save("main", _probe())
+    monkeypatch.setattr(time, "time", lambda: 9_000.0)
+    cache.save("main", _probe())
+
+    monkeypatch.setattr(time, "time", lambda: 10_000.0)
+    assert cache.load_scoped("main") == (
+        ScopedLimit(label="fable", pct=57.0, reset_secs=86400 - 9_000, stale=True, age_secs=9_000),
+    )

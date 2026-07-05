@@ -29,6 +29,28 @@ MAX_CACHE_AGE_SECONDS = 10 * 60
 _WINDOW_COL = {"5h": 1, "7d": 2}
 
 
+def _parse_scoped_entry(entry: object, now: float) -> ScopedLimit | None:
+    """Turn a cached ``[label, pct, reset_at, fetched_at?]`` entry into a ScopedLimit.
+
+    Cache-served values are always ``stale`` — they were fetched by an earlier
+    probe. ``fetched_at`` yields ``age_secs``; 3-element entries predate the
+    fetch timestamp, so their age stays ``None`` (stale, unknown age). An
+    elapsed reset window zeroes the pct (usage has reset).
+    """
+    if not isinstance(entry, list) or len(entry) not in (3, 4):
+        return None
+    label, pct, reset_at = entry[0], entry[1], entry[2]
+    fetched_at = entry[3] if len(entry) == 4 else None
+    secs = max(0, int(float(reset_at) - now))
+    return ScopedLimit(
+        label=str(label),
+        pct=0.0 if secs == 0 else float(pct),
+        reset_secs=secs,
+        stale=True,
+        age_secs=max(0, int(now - float(fetched_at))) if fetched_at is not None else None,
+    )
+
+
 class UsageCache:
     def __init__(self, paths: Paths) -> None:
         self._paths = paths
@@ -56,6 +78,8 @@ class UsageCache:
         moves through the account's own usage, so the last fetched value stays a
         valid lower bound until the window resets. Used to backfill a probe
         whose OAuth usage fetch failed (the endpoint rate-limits aggressively).
+        Served entries are marked ``stale`` and carry their fetch age so
+        renderers can flag them instead of passing them off as fresh.
         """
         raw = self._read_raw(name)
         if raw is None:
@@ -63,13 +87,10 @@ class UsageCache:
         now = time.time()
         scoped: list[ScopedLimit] = []
         for entry in raw.get("w7_scoped") or []:
-            if not isinstance(entry, list) or len(entry) != 3:
-                continue
-            label, pct, reset_at = entry
-            secs = max(0, int(float(reset_at) - now))
-            if secs == 0:
-                continue  # window elapsed — the scoped usage has reset
-            scoped.append(ScopedLimit(label=str(label), pct=float(pct), reset_secs=secs))
+            s = _parse_scoped_entry(entry, now)
+            if s is None or s.reset_secs == 0:
+                continue  # malformed, or window elapsed — the scoped usage has reset
+            scoped.append(s)
         return tuple(scoped)
 
     def load(self, name: str) -> ProbeResult | None:
@@ -109,17 +130,9 @@ class UsageCache:
 
         scoped: list[ScopedLimit] = []
         for entry in raw.get("w7_scoped") or []:
-            if not isinstance(entry, list) or len(entry) != 3:
-                continue
-            label, pct, reset_at = entry
-            secs = _secs(float(reset_at))
-            scoped.append(
-                ScopedLimit(
-                    label=str(label),
-                    pct=0.0 if secs == 0 else float(pct),
-                    reset_secs=secs,
-                )
-            )
+            s = _parse_scoped_entry(entry, now)
+            if s is not None:
+                scoped.append(s)
 
         return ProbeResult(
             ok=True,
@@ -137,16 +150,24 @@ class UsageCache:
             return
         self._paths.usage_dir.mkdir(parents=True, exist_ok=True)
         now = time.time()
-        scoped = [[s.label, s.pct, now + s.reset_secs] for s in result.w7_scoped]
+
+        def _fetched_at(s: ScopedLimit) -> float | None:
+            # Live values were fetched by this probe; a stale value being
+            # re-saved keeps its original fetch time (None = unknown/legacy).
+            if not s.stale:
+                return now
+            return now - s.age_secs if s.age_secs is not None else None
+
+        scoped = [[s.label, s.pct, now + s.reset_secs, _fetched_at(s)] for s in result.w7_scoped]
         if not scoped:
             # An empty result usually means the OAuth usage fetch failed (429),
             # not that the limits vanished — keep the last known entries until
             # their own reset elapses instead of clobbering them.
             prev = self._read_raw(name) or {}
             scoped = [
-                e
+                [e[0], e[1], e[2], e[3] if len(e) == 4 else None]
                 for e in prev.get("w7_scoped") or []
-                if isinstance(e, list) and len(e) == 3 and float(e[2]) > now
+                if isinstance(e, list) and len(e) in (3, 4) and float(e[2]) > now
             ]
         payload = {
             "probed_at": now,
