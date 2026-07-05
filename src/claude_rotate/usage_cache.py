@@ -29,6 +29,21 @@ MAX_CACHE_AGE_SECONDS = 10 * 60
 _WINDOW_COL = {"5h": 1, "7d": 2}
 
 
+def _serialize_scoped(scoped: tuple[ScopedLimit, ...], now: float) -> list[list[Any]]:
+    """ScopedLimits -> cache entries ``[label, pct, reset_at, fetched_at]``.
+
+    Live values were fetched now; a stale value being re-saved keeps its
+    original fetch time (``None`` = unknown/legacy).
+    """
+
+    def fetched_at(s: ScopedLimit) -> float | None:
+        if not s.stale:
+            return now
+        return now - s.age_secs if s.age_secs is not None else None
+
+    return [[s.label, s.pct, now + s.reset_secs, fetched_at(s)] for s in scoped]
+
+
 def _parse_scoped_entry(entry: object, now: float) -> ScopedLimit | None:
     """Turn a cached ``[label, pct, reset_at, fetched_at?]`` entry into a ScopedLimit.
 
@@ -150,15 +165,7 @@ class UsageCache:
             return
         self._paths.usage_dir.mkdir(parents=True, exist_ok=True)
         now = time.time()
-
-        def _fetched_at(s: ScopedLimit) -> float | None:
-            # Live values were fetched by this probe; a stale value being
-            # re-saved keeps its original fetch time (None = unknown/legacy).
-            if not s.stale:
-                return now
-            return now - s.age_secs if s.age_secs is not None else None
-
-        scoped = [[s.label, s.pct, now + s.reset_secs, _fetched_at(s)] for s in result.w7_scoped]
+        scoped = _serialize_scoped(result.w7_scoped, now)
         if not scoped:
             # An empty result usually means the OAuth usage fetch failed (429),
             # not that the limits vanished — keep the last known entries until
@@ -181,6 +188,23 @@ class UsageCache:
         }
         self._atomic_write(self._path_for(name), payload)
         self._append_history(name, now, result.h5_pct, result.w7_pct)
+
+    def update_scoped(self, name: str, scoped: tuple[ScopedLimit, ...]) -> None:
+        """Persist freshly fetched scoped limits without a full probe save.
+
+        ``status`` probes fetch scoped limits live but (unlike ``run``) never
+        save the probe result. Successful OAuth fetches are rare under the
+        endpoint's aggressive rate-limiting, so discarding them leaves the
+        backfill stale for hours. This rewrites only ``w7_scoped`` in the
+        existing cache entry (creating a minimal one when absent), leaving
+        ``probed_at`` and the usage history untouched.
+        """
+        if not scoped:
+            return
+        self._paths.usage_dir.mkdir(parents=True, exist_ok=True)
+        raw = self._read_raw(name) or {}
+        raw["w7_scoped"] = _serialize_scoped(scoped, time.time())
+        self._atomic_write(self._path_for(name), raw)
 
     def _atomic_write(self, path: Path, payload: object) -> None:
         fd, tmp = tempfile.mkstemp(dir=str(self._paths.usage_dir), prefix=".tmp-")

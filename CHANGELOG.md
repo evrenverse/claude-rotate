@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dashboard and `status --report` (legend updated), and `--json` gains
   per-scoped-entry `stale` / `age_secs` fields. Legacy 3-element cache entries
   load as stale with unknown age.
+- **`status` now persists successful scoped fetches.** Only `run` saved the
+  usage cache, so a scoped value fetched live during `status` was displayed
+  and thrown away — the cache (and every later backfill) stayed at whatever
+  the last `run` happened to catch, hours or days old. `status` now writes
+  fresh scoped limits back via `UsageCache.update_scoped` (only `w7_scoped`;
+  `probed_at` and the burn-rate history stay untouched).
 
 ## [0.5.0] - 2026-06-14
 

@@ -55,6 +55,35 @@ def test_status_exits_0_when_all_healthy(tmp_path) -> None:
     assert rc == 0
 
 
+def test_status_persists_live_scoped_fetch(tmp_path) -> None:
+    """A successful scoped fetch during status lands in the usage cache."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    from claude_rotate.selection import Candidate, ScopedLimit
+    from claude_rotate.usage_cache import UsageCache
+
+    cand = Candidate(
+        account=_acc(),
+        h5_pct=10.0,
+        w7_pct=20.0,
+        h5_reset_secs=3600,
+        w7_reset_secs=86400,
+        w7_scoped=(ScopedLimit(label="fable", pct=88.0, reset_secs=86400),),
+    )
+    with patch("claude_rotate.commands.status.probe_many", return_value=[cand]):
+        from claude_rotate.commands import status
+
+        rc = status.execute(p, as_json=False)
+    assert rc == 0
+    served = UsageCache(p).load_scoped("main")
+    assert len(served) == 1
+    assert served[0].label == "fable"
+    assert served[0].pct == 88.0
+    assert served[0].stale is True  # cache-served values are stale by definition
+
+
 def test_status_json_outputs_valid_json(tmp_path, capsys) -> None:
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)

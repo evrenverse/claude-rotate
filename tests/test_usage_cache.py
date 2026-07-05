@@ -305,6 +305,45 @@ def test_load_scoped_legacy_entry_is_stale_with_unknown_age(
     )
 
 
+def test_update_scoped_persists_without_touching_probe_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """update_scoped rewrites only w7_scoped; probed_at and pcts stay put."""
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(scoped=(ScopedLimit(label="fable", pct=57.0, reset_secs=86400),)))
+
+    monkeypatch.setattr(time, "time", lambda: 5_000.0)
+    cache.update_scoped("main", (ScopedLimit(label="fable", pct=90.0, reset_secs=86400),))
+
+    raw = json.loads((tmp_path / "cache" / "usage" / "main.json").read_text())
+    assert raw["probed_at"] == 1_000.0  # untouched — no fake probe freshness
+    assert raw["h5_pct"] == 5.0
+    monkeypatch.setattr(time, "time", lambda: 5_060.0)
+    assert cache.load_scoped("main") == (
+        ScopedLimit(label="fable", pct=90.0, reset_secs=86340, stale=True, age_secs=60),
+    )
+
+
+def test_update_scoped_creates_minimal_entry_and_ignores_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.update_scoped("fresh", ())  # no-op — nothing fetched, nothing written
+    assert not (tmp_path / "cache" / "usage" / "fresh.json").exists()
+
+    cache.update_scoped("fresh", (ScopedLimit(label="fable", pct=42.0, reset_secs=600),))
+    assert cache.load_scoped("fresh") == (
+        ScopedLimit(label="fable", pct=42.0, reset_secs=600, stale=True, age_secs=0),
+    )
+    assert cache.load("fresh") is None or cache.load("fresh").h5_pct is None
+
+
 def test_save_preserves_fetch_age_across_repeated_failed_fetches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
