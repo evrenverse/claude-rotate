@@ -260,6 +260,11 @@ def _collect(paths: Paths) -> _Collected:
                 )
             )
             continue
+        if c.w7_scoped:
+            # A successful scoped fetch is rare (the OAuth endpoint 429s
+            # aggressively) — persist it so later backfills serve this value
+            # instead of an hours-older one; status never saves full probes.
+            cache.update_scoped(c.account.name, c.w7_scoped)
         rows.append(
             DashboardRow(
                 account=c.account,
