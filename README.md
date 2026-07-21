@@ -1,6 +1,6 @@
 # claude-rotate
 
-[![CI](https://github.com/codename-cn/claude-rotate/actions/workflows/ci.yml/badge.svg)](https://github.com/codename-cn/claude-rotate/actions/workflows/ci.yml)
+[![CI](https://github.com/evrenverse/claude-rotate/actions/workflows/ci.yml/badge.svg)](https://github.com/evrenverse/claude-rotate/actions/workflows/ci.yml)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
@@ -49,8 +49,8 @@ Requires Python ≥ 3.11 and [`claude`](https://claude.com/claude-code) (2.1.117
 **1. Install** from GitHub (not on PyPI yet):
 
 ```sh
-uv tool install git+https://github.com/codename-cn/claude-rotate
-# or: pipx install git+https://github.com/codename-cn/claude-rotate
+uv tool install git+https://github.com/evrenverse/claude-rotate
+# or: pipx install git+https://github.com/evrenverse/claude-rotate
 ```
 
 **2. Wire up the shell alias** — scoped to `run` so only the rotation happens through the wrapper; `claude doctor`, `claude auth`, etc. still hit the real binary untouched:
@@ -193,7 +193,7 @@ Issues and PRs welcome — see [`AGENTS.md`](./AGENTS.md) if you want your codin
 
 ---
 
-> ⭐ **If you find this useful, [star the repo](https://github.com/codename-cn/claude-rotate)** — it helps other devs with multiple Claude Code subscriptions find it.
+> ⭐ **If you find this useful, [star the repo](https://github.com/evrenverse/claude-rotate)** — it helps other devs with multiple Claude Code subscriptions find it.
 
 ## License
 

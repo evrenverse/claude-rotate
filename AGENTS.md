@@ -16,7 +16,7 @@ instructions in claude-rotate's AGENTS.md exactly. Specifically:
 1. Verify the real `claude` binary (v2.1.117+) is on PATH; if not, direct
    me to https://claude.com/claude-code and stop.
 2. Install `claude-rotate` from GitHub. Prefer uv; fall back to pipx:
-     uv tool install git+https://github.com/codename-cn/claude-rotate
+     uv tool install git+https://github.com/evrenverse/claude-rotate
    (claude-rotate is not on PyPI yet — use the GitHub URL.)
 3. Add `alias claude='claude-rotate run'` to my shell rc (zsh or bash —
    detect which I use). Do NOT use `alias claude='claude-rotate'` — that

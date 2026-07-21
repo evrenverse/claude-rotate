@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO="${CLAUDE_ROTATE_REPO:-https://github.com/codename-cn/claude-rotate}"
+REPO="${CLAUDE_ROTATE_REPO:-https://github.com/evrenverse/claude-rotate}"
 SRC="git+${REPO}"
 
 msg() { printf "==> %s\n" "$*" >&2; }
