@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from urllib.parse import parse_qs, urlparse
 
-from claude_rotate.accounts import Account, Store
+from claude_rotate.accounts import Account, Store, validate_account_name
 from claude_rotate.config import Paths
 from claude_rotate.errors import AccountError
 from claude_rotate.oauth import (
@@ -89,7 +89,13 @@ def build_account(
     subscription_status: str | None = None,
     refresh_token: str | None = None,
 ) -> Account:
-    """Build an Account from supplied metadata."""
+    """Build an Account from supplied metadata.
+
+    The name is validated here because both login paths funnel through this
+    function — the interactive prompt validates too, but a name passed as a
+    CLI argument would otherwise reach the store unchecked.
+    """
+    validate_account_name(name)
     plan_display_map = {"max_20x": "Max-20", "max_5x": "Max-5", "pro": "Pro"}
     return Account(
         name=name,
@@ -164,12 +170,7 @@ def _prompt_name(default: str) -> str:
     answer = input(f"  Save as account named [{default}]: ").strip()
     if not answer:
         return default
-    if not re.match(r"^[A-Za-z0-9._\-]+$", answer):
-        raise AccountError(
-            f"Name {answer!r} contains characters outside [A-Za-z0-9._-]. "
-            "Use a simple alphanumeric name."
-        )
-    return answer
+    return validate_account_name(answer)
 
 
 def _prompt_manual_expiry() -> datetime | None:

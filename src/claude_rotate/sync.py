@@ -34,10 +34,10 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
-from claude_rotate.accounts import Store
+from claude_rotate.accounts import LockedStore, Store
 from claude_rotate.config import Paths
 from claude_rotate.credentials_file import CredentialsPayload, read_credentials, write_credentials
-from claude_rotate.errors import ClaudeRotateError
+from claude_rotate.errors import ClaudeRotateError, LockTimeoutError
 from claude_rotate.oauth import refresh_access_token
 from claude_rotate.refresh_policy import should_refresh
 
@@ -89,32 +89,43 @@ def reconcile_once(
 
     Returns True if accounts.json was modified, False otherwise.
     Silent on errors (missing session file, account no longer exists).
+
+    The whole load → compare → save runs under the accounts.json lock. Without
+    it, a save built from a stale read would clobber a token another process
+    rotated in the meantime, re-arming an already-spent refresh token.
     """
     session = read_current_session(paths)
     if session is None:
         return False
 
     store = Store(paths)
-    all_accounts = store.load()
-    stored = all_accounts.get(session.account_name)
-    if stored is None:
-        return False
+    try:
+        with store.locked() as locked:
+            all_accounts = locked.load()
+            stored = all_accounts.get(session.account_name)
+            if stored is None:
+                return False
 
-    access_changed = payload.access_token != stored.runtime_token
-    refresh_changed = payload.refresh_token != stored.refresh_token
-    if not access_changed and not refresh_changed:
-        return False
+            access_changed = payload.access_token != stored.runtime_token
+            refresh_changed = payload.refresh_token != stored.refresh_token
+            if not access_changed and not refresh_changed:
+                return False
 
-    updated = replace(
-        stored,
-        runtime_token=payload.access_token,
-        refresh_token=payload.refresh_token,
-        runtime_token_obtained_at=now if access_changed else stored.runtime_token_obtained_at,
-        refresh_token_obtained_at=now if refresh_changed else stored.refresh_token_obtained_at,
-    )
-    all_accounts[session.account_name] = updated
-    store.save(all_accounts)
-    return True
+            all_accounts[session.account_name] = replace(
+                stored,
+                runtime_token=payload.access_token,
+                refresh_token=payload.refresh_token,
+                runtime_token_obtained_at=(
+                    now if access_changed else stored.runtime_token_obtained_at
+                ),
+                refresh_token_obtained_at=(
+                    now if refresh_changed else stored.refresh_token_obtained_at
+                ),
+            )
+            locked.save(all_accounts)
+            return True
+    except LockTimeoutError:
+        return False  # another writer is mid-rotation; the next tick retries
 
 
 def reconcile_all(paths: Paths, *, now: datetime) -> bool:
@@ -132,14 +143,32 @@ def reconcile_isolated(paths: Paths, *, now: datetime) -> list[str]:
     each account owns ``<configs>/<account>/.credentials.json``. A running
     session rotates tokens inside its own dir, so we read every account dir
     and write any drift back. Returns the names that changed.
-    """
-    from claude_rotate.credentials_file import CredentialsFile
 
+    Held under the accounts.json lock for the same reason as ``reconcile_once``:
+    the per-account files are only read here, so the critical section stays
+    short, and a concurrent rotation cannot be overwritten from a stale read.
+    """
     base = paths.account_configs_dir
     if not base.is_dir():
         return []
     store = Store(paths)
-    accounts = store.load()
+    try:
+        with store.locked() as locked:
+            return _reconcile_isolated_locked(locked, base, now=now)
+    except LockTimeoutError:
+        return []  # another writer is mid-rotation; the next tick retries
+
+
+def _reconcile_isolated_locked(
+    locked: LockedStore,
+    base: Path,
+    *,
+    now: datetime,
+) -> list[str]:
+    """``reconcile_isolated`` body, with the accounts.json lock already held."""
+    from claude_rotate.credentials_file import CredentialsFile
+
+    accounts = locked.load()
     changed: list[str] = []
     for name, acct in list(accounts.items()):
         cred_path = base / name / ".credentials.json"
@@ -172,7 +201,7 @@ def reconcile_isolated(paths: Paths, *, now: datetime) -> list[str]:
         )
         changed.append(name)
     if changed:
-        store.save(accounts)
+        locked.save(accounts)
     return changed
 
 

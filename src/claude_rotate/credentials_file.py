@@ -43,6 +43,8 @@ class CredentialsPayload:
 
     @classmethod
     def from_json(cls, raw: dict[str, object]) -> CredentialsPayload:
+        if not isinstance(raw, dict):
+            raise ValueError(f"credentials.json: expected a JSON object, got {type(raw).__name__}")
         oauth_raw = raw.get("claudeAiOauth")
         if not isinstance(oauth_raw, dict):
             raise ValueError("credentials.json: missing 'claudeAiOauth' object")
@@ -101,9 +103,19 @@ class CredentialsFile:
         self._remove_backups()
 
     def read(self) -> CredentialsPayload | None:
+        """Parsed credentials, or ``None`` when the file is absent or unusable.
+
+        A half-written or schema-drifted file must read as "nothing to sync",
+        not as an exception: the cron entry point calls this before its
+        proactive token refresh, so a raised error would abort the tick and
+        silently stop refreshing every account until the next relogin.
+        """
         if not self.path.exists():
             return None
-        return CredentialsPayload.from_json(json.loads(self.path.read_text()))
+        try:
+            return CredentialsPayload.from_json(json.loads(self.path.read_text()))
+        except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+            return None
 
     def _remove_backups(self) -> None:
         for backup in self._dir.glob(".credentials.json.bak-*"):

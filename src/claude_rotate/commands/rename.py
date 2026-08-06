@@ -6,11 +6,13 @@ import argparse
 import sys
 from dataclasses import replace
 
-from claude_rotate.accounts import Store, resolve_name
+from claude_rotate.accounts import Store, resolve_name, validate_account_name
 from claude_rotate.config import Paths
 
 
 def execute(paths: Paths, args: argparse.Namespace) -> int:
+    # The new handle becomes a cache filename below, so validate before any write.
+    validate_account_name(args.new)
     store = Store(paths)
     accounts = store.load()
     old = resolve_name(accounts, args.old)

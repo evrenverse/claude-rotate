@@ -10,6 +10,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import re
 import tempfile
 import time
 from collections.abc import Iterator
@@ -20,7 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from claude_rotate.config import Paths
-from claude_rotate.errors import ConfigError, LockTimeoutError
+from claude_rotate.errors import AccountError, ConfigError, LockTimeoutError
 
 SCHEMA_VERSION = 9
 # Older schema versions that load without migration logic (new fields absent
@@ -128,6 +129,33 @@ class Account:
             "runtime_token_obtained_at": _fmt_iso(self.runtime_token_obtained_at),
             "refresh_token_obtained_at": _fmt_iso(self.refresh_token_obtained_at),
         }
+
+
+# Matched with fullmatch, deliberately unanchored: ``$`` also matches *before* a
+# trailing newline, so an anchored ``match`` would accept "..\n" and slip past
+# the relative-path check below.
+_NAME_RE = re.compile(r"[A-Za-z0-9._\-]+")
+
+
+def validate_account_name(name: str) -> str:
+    """Return ``name`` unchanged, or raise ``AccountError`` if it is unsafe.
+
+    Account names are used verbatim as path components — the usage cache
+    (``usage/<name>.json``) and, under session isolation, a per-account config
+    dir (``configs/<name>``). A name carrying a separator or resolving to a
+    parent would place those outside their directory, so the character set is
+    restricted and the two relative-path names are rejected outright. Both
+    login paths reach this through ``build_account``; ``rename`` calls it
+    directly.
+    """
+    if not _NAME_RE.fullmatch(name):
+        raise AccountError(
+            f"account name {name!r} contains characters outside [A-Za-z0-9._-]. "
+            "Use a simple alphanumeric name."
+        )
+    if name in (".", ".."):
+        raise AccountError(f"account name {name!r} is a relative path, not a name.")
+    return name
 
 
 def resolve_name(accounts: dict[str, Account], ident: str) -> str | None:
