@@ -86,11 +86,12 @@ def compute_forecast(
     ``rate_per_sec`` (when given) is the burn observed over a recent tail window, in
     %-points/sec; the projection then blends it with the window-average rate so a late
     burst pushes the result up instead of being diluted across the whole window. With
-    ``rate_per_sec is None`` the result is the plain average-pace projection, bit-identical
-    to the original (and to projecting to the reset when ``horizon_secs is None``).
+    ``rate_per_sec is None`` the result is the plain average-pace projection (and projects
+    to the reset when ``horizon_secs is None``).
 
     Returns ``None`` for no usable elapsed time or ``pct >= 100``, 0 for zero usage, caps
-    at 999.
+    at 999. Rounding happens on the *result*, not the input — truncating ``pct`` first
+    would project sub-1% usage as a flat 0%.
     """
     if pct is None or reset_secs <= 0:
         return None
@@ -103,7 +104,7 @@ def compute_forecast(
         return None
     horizon = reset_secs if horizon_secs is None else min(reset_secs, horizon_secs)
     if rate_per_sec is None:
-        return min(999, int(pct) * (elapsed + horizon) // elapsed)
+        return min(999, int(pct * (elapsed + horizon) / elapsed))
     return min(999, max(0, int(pct + _blended_rate(pct, elapsed, rate_per_sec) * horizon)))
 
 
