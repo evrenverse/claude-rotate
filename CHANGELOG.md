@@ -65,6 +65,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fresh scoped limits back via `UsageCache.update_scoped` (only `w7_scoped`;
   `probed_at` and the burn-rate history stay untouched).
 
+## [0.6.0] - 2026-06-20
+
+Documented retroactively — this release shipped without changelog entries.
+
+### Added
+
+- **Recency-weighted forecast.** The projection assumed the window-average
+  burn rate continued to reset, so a late burst was diluted across the whole
+  elapsed window and under-projected. A per-account usage-history trail is now
+  persisted (written on each launch, pruned to 12h / 500 points) and a recent
+  tail rate derived from it; `compute_forecast` / `compute_limit_eta` blend
+  that tail rate with the window average (`FORECAST_RECENCY_WEIGHT`, default
+  0.6). With no history the average-pace path is unchanged. Routing keeps the
+  stable average pace deliberately — the tail rate feeds only the rendered
+  forecast.
+- **Forecast horizon capped at subscription expiry.** When a subscription ends
+  before the window resets, the projection is capped at the expiry and marked
+  with a `⌛` in the dashboard and `status --report`; `status --json` exports
+  the capped values.
+- **Capacity-gated expiry selection.** A soon-expiring account keeps its
+  Tier-1 / Tier-2 expiry shortcut only while it can still host another session
+  in the current 5h window (`CAPACITY_GATE_THRESHOLD`); below that, the
+  load- and pace-aware Tier-3 decides instead. It never makes an account
+  unpickable.
+- **Bordered compact dashboard.** Below the cards-mode width threshold the
+  dashboard dropped its border and printed borderless text blocks.
+  Phone-width terminals now get the same chrome as the wide table: a
+  single-column rounded table with a rule between accounts. Greying parity is
+  kept — unusable accounts flatten to grey, loud error labels stay coloured.
+
+### Fixed
+
+- **Tier-3 no longer picks an account it projects to blow past its limit.**
+  A high weekly urgency (earliest weekly reset) could keep winning Tier-3 even
+  while the account's 5h or weekly forecast projected >100% and another
+  account sat fresh — the soft `[0,1]` dampeners cannot overcome the unbounded
+  weekly urgency. A hard gate now yields to any account that is neither
+  capacity-gated nor forecast over 100%; only when every usable account is
+  gated does the drain score rank the whole set. The gate reuses the same
+  `compute_forecast` the dashboard renders, so what the user sees drives the
+  pick.
+
 ## [0.5.0] - 2026-06-14
 
 ### Added
