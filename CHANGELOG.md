@@ -7,8 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-06
+
+### Added
+
+- **Model-scoped weekly limits (e.g. Fable's own cap) in the status views.**
+  The OAuth usage endpoint's `limits` array carries `weekly_scoped` windows
+  the legacy top-level buckets don't. They render as dim-labelled full window
+  lines beneath `week` in the dashboard and `status --report`, and appear in
+  `--json`.
+
 ### Fixed
 
+- **Concurrent writers no longer roll `accounts.json` back to spent tokens.**
+  `Store.locked()` exists so a `load → modify → save` cycle runs as one
+  critical section, but three automatic writers skipped it and saved a whole
+  account map built from a stale read: `metadata.refresh_stale_accounts`
+  (runs on every `run` and `status`, with multi-second HTTP probes inside the
+  window) and `sync.reconcile_once` / `reconcile_isolated` (every 2-minute
+  cron tick). A token rotated by the cron mid-window was overwritten with the
+  pre-rotation value, so the next refresh re-sent an already-spent refresh
+  token — tripping Anthropic's reuse detection, revoking the token family and
+  forcing a relogin. All three now hold the lock; the metadata refresh keeps
+  its probes *outside* the lock and merges only metadata fields against a
+  freshly loaded store, keyed by name **and** `created_at` so a handle re-used
+  by a different account does not inherit the old one's identity.
+- **A corrupt `.credentials.json` no longer kills the sync cron.**
+  `CredentialsFile.read()` raised on a half-written or schema-drifted file.
+  Since `sync-credentials` reconciles *before* its proactive token refresh,
+  the tick aborted and every account silently stopped being refreshed until
+  the next relogin. The file now reads as "nothing to sync" instead, and
+  `CredentialsPayload.from_json` rejects a non-object document cleanly.
+- **Account names from CLI arguments are validated.** Names are used verbatim
+  as path components (`usage/<name>.json`, `configs/<name>`), but only the
+  interactive prompt checked them — a name passed as an argument to `login` or
+  `rename` reached the store unchecked. Validation moved to a single
+  `accounts.validate_account_name`, which both login paths reach through
+  `build_account`. It also closes two holes in the old prompt-only regex: `.`
+  and `..` matched its character class, and Python's `$` matches before a
+  trailing newline, so `"..\n"` slipped past an anchored `re.match`.
+- **Sub-1% usage no longer forecasts as a flat 0%.** `compute_forecast`
+  truncated `pct` *before* projecting, so 0.7% burned over half a window
+  projected to 0 instead of ~1%. Rounding now happens on the result.
 - **Cache-backfilled model-scoped limits no longer masquerade as fresh data.**
   When the OAuth usage fetch fails (it rate-limits aggressively), the scoped
   weekly lines (e.g. Fable) are backfilled from the usage cache — previously
