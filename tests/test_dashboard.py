@@ -321,14 +321,14 @@ def test_stale_footer_silent_for_ci_account() -> None:
 
 
 def test_compute_forecast_5h_screenshot_value() -> None:
-    # 63% bei noch 47m Reset im 5h-Fenster (Statusline-Referenzwert → 74)
+    # 63% with 47m left in the 5h window (statusline reference value → 74)
     from claude_rotate.config import FORECAST_WINDOW_5H_SECONDS
 
     assert compute_forecast(63.0, 47 * 60, FORECAST_WINDOW_5H_SECONDS) == 74
 
 
 def test_compute_forecast_weekly_screenshot_value() -> None:
-    # 55% bei noch 1d14h47m Reset im 7d-Fenster (Statusline-Referenzwert → 71)
+    # 55% with 1d14h47m left in the 7d window (statusline reference value → 71)
     from claude_rotate.config import FORECAST_WINDOW_7D_SECONDS
 
     reset = (24 + 14) * 3600 + 47 * 60  # 1d14h47m
@@ -336,7 +336,7 @@ def test_compute_forecast_weekly_screenshot_value() -> None:
 
 
 def test_compute_forecast_truncates_like_statusline() -> None:
-    # 74.70 muss zu 74 abgeschnitten werden (nicht gerundet auf 75)
+    # 74.70 must truncate to 74, not round to 75
     from claude_rotate.config import FORECAST_WINDOW_5H_SECONDS
 
     assert compute_forecast(63.0, 47 * 60, FORECAST_WINDOW_5H_SECONDS) == 74
@@ -347,12 +347,12 @@ def test_compute_forecast_none_pct_returns_none() -> None:
 
 
 def test_compute_forecast_no_active_window_returns_none() -> None:
-    # reset_secs <= 0 → Fenster abgelaufen, keine Prognose
+    # reset_secs <= 0 → window expired, no forecast
     assert compute_forecast(50.0, 0, 18000) is None
 
 
 def test_compute_forecast_fresh_window_returns_none() -> None:
-    # elapsed <= 0 (reset_secs == window) → 0 verstrichen, keine Prognose
+    # elapsed <= 0 (reset_secs == window) → nothing elapsed, no forecast
     assert compute_forecast(50.0, 18000, 18000) is None
 
 
@@ -366,13 +366,13 @@ def test_compute_forecast_caps_at_999() -> None:
 
 
 def test_compute_limit_eta_seconds_until_100() -> None:
-    # 60% bei halb verstrichenem 5h-Fenster (reset=9000, elapsed=9000):
-    # Prognose 120% → Limit wird erreicht in (100-60)*9000//60 = 6000s, vor Reset.
+    # 60% halfway through the 5h window (reset=9000, elapsed=9000):
+    # forecast 120% → limit hit in (100-60)*9000//60 = 6000s, before the reset.
     assert compute_limit_eta(60.0, 9000, 18000) == 6000
 
 
 def test_compute_limit_eta_none_when_forecast_under_100() -> None:
-    # 63% bei noch 47m Reset → Prognose 74% < 100 → Fenster resettet vor der Wand.
+    # 63% with 47m left → forecast 74% < 100 → the window resets before the wall.
     assert compute_limit_eta(63.0, 47 * 60, 18000) is None
 
 
@@ -385,7 +385,7 @@ def test_compute_limit_eta_at_or_over_limit_returns_none() -> None:
 
 
 def test_compute_limit_eta_fresh_window_returns_none() -> None:
-    # elapsed <= 0 (reset_secs == window) → keine verstrichene Zeit, keine ETA.
+    # elapsed <= 0 (reset_secs == window) → no time elapsed, no ETA.
     assert compute_limit_eta(50.0, 18000, 18000) is None
 
 
@@ -398,7 +398,7 @@ def test_compute_limit_eta_none_pct_returns_none() -> None:
 
 
 def test_render_shows_forecast_bracket_by_default() -> None:
-    # 50% bei noch 1h (3600s) im 5h-Fenster: elapsed=14400 → 50*18000//14400 = 62
+    # 50% with 1h (3600s) left in the 5h window: elapsed=14400 → 50*18000//14400 = 62
     rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400)]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
     render_dashboard(rows, chosen="main", console=console)
@@ -415,7 +415,7 @@ def test_render_omits_forecast_when_disabled() -> None:
 
 
 def test_render_no_forecast_for_elapsed_window() -> None:
-    # reset_secs == window → frisches Fenster, keine Prognose, aber kein Crash
+    # reset_secs == window → fresh window, no forecast, but no crash either
     rows = [_row(_acc("main"), h5_pct=10.0, h5_secs=18000, w7_pct=10.0, w7_secs=604800)]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
     render_dashboard(rows, chosen="main", console=console)
@@ -424,8 +424,8 @@ def test_render_no_forecast_for_elapsed_window() -> None:
 
 
 def test_render_forecast_keeps_expires_column_aligned() -> None:
-    # Eine Zeile mit Prognose, eine ohne (frisches Fenster) — die expires-Spalte
-    # (Tag-Werte) muss in beiden Zeilen an derselben Spalte enden.
+    # One row with a forecast, one without (fresh window) — the expires column
+    # (day values) must end at the same column in both rows.
     fixed_now = datetime(2026, 4, 22, tzinfo=UTC)
     rows = [
         _row(_acc("a", sub_days=30), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400),
@@ -439,7 +439,7 @@ def test_render_forecast_keeps_expires_column_aligned() -> None:
         if "d" in ln and ("30d" in ln or "19d" in ln)
     ]
     assert len(lines) == 2
-    # rstrip-Länge identisch → beide Zeilen enden an derselben Spalte
+    # identical rstrip length → both rows end at the same column
     assert len(lines[0].rstrip()) == len(lines[1].rstrip())
 
 
@@ -469,7 +469,7 @@ def test_forecast_enabled_on_for_other_values(monkeypatch) -> None:
 def test_status_json_includes_forecast_fields() -> None:
     from claude_rotate.dashboard import status_json
 
-    # 50% bei noch 1h im 5h-Fenster → 62; 20% bei noch 1d im 7d-Fenster
+    # 50% with 1h left in the 5h window → 62; 20% with 1d left in the 7d window
     rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400)]
     payload = status_json(rows, chosen="main")
     acct = payload["accounts"][0]
@@ -494,12 +494,12 @@ def test_compute_forecast_hidden_at_or_above_100pct() -> None:
 
 
 def test_compute_forecast_shown_just_below_100pct() -> None:
-    # 99% bei noch 1h im 5h-Fenster: elapsed=14400 → 99*18000//14400 = 123
+    # 99% with 1h left in the 5h window: elapsed=14400 → 99*18000//14400 = 123
     assert compute_forecast(99.0, 3600, 18000) == 123
 
 
 def test_render_omits_forecast_when_already_maxed() -> None:
-    # Beide Fenster >= 100% → kein Prognose-Token (Warnings dürfen "→" enthalten)
+    # both windows >= 100% → no forecast token (warnings may contain "→")
     import re
 
     rows = [_row(_acc("main"), h5_pct=100.0, h5_secs=3600, w7_pct=101.0, w7_secs=86400)]
@@ -541,7 +541,7 @@ def test_render_active_account_gets_at_marker() -> None:
 
 
 def test_render_shows_absolute_reset_clock() -> None:
-    # 50% bei noch 1h im 5h-Fenster → Reset-Uhrzeit (HH:MM) muss erscheinen
+    # 50% with 1h left in the 5h window → the reset time (HH:MM) must appear
     fixed_now = datetime(2026, 4, 22, 10, 0, tzinfo=UTC)
     expected = (fixed_now + timedelta(hours=1)).astimezone().strftime("%H:%M")
     rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600)]
@@ -551,7 +551,7 @@ def test_render_shows_absolute_reset_clock() -> None:
 
 
 def test_render_shows_limit_eta_when_wall_before_reset() -> None:
-    # 60% bei halb verstrichenem 5h-Fenster → ETA nach 6000s, vor dem Reset.
+    # 60% halfway through the 5h window → ETA in 6000s, before the reset.
     fixed_now = datetime(2026, 4, 22, 10, 0, tzinfo=UTC)
     eta_clock = (fixed_now + timedelta(seconds=6000)).astimezone().strftime("%H:%M")
     rows = [_row(_acc("main"), h5_pct=60.0, h5_secs=9000)]
