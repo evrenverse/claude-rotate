@@ -7,21 +7,18 @@ helpers — no file I/O yet.
 
 from __future__ import annotations
 
-import fcntl
 import json
-import os
 import re
-import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from claude_rotate.config import Paths
-from claude_rotate.errors import AccountError, ConfigError, LockTimeoutError
+from claude_rotate.config import Paths, atomic_write_json, file_lock
+from claude_rotate.errors import AccountError, ConfigError
 
 SCHEMA_VERSION = 9
 # Older schema versions that load without migration logic (new fields absent
@@ -201,9 +198,6 @@ def account_from_dict(name: str, raw: dict[str, Any]) -> Account:
     )
 
 
-_LOCK_TIMEOUT_SECONDS = 10
-
-
 class Store:
     """Load/save `accounts.json` atomically, with a flock on write paths."""
 
@@ -246,24 +240,13 @@ class Store:
         # (usually 0o755) and `doctor` rightly reports a warning.
         path.parent.chmod(0o700)
 
-        payload = {
-            "version": SCHEMA_VERSION,
-            "accounts": {name: acct.to_dict() for name, acct in accounts.items()},
-        }
-        fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
-        tmp = Path(tmp_str)
-        try:
-            # chmod *before* writing any token bytes so the file is
-            # never world/group-readable, not even for the microseconds
-            # between the write and a post-write chmod.
-            tmp.chmod(0o600)
-            with os.fdopen(fd, "w") as f:
-                json.dump(payload, f, indent=2, sort_keys=True)
-                f.write("\n")
-            tmp.replace(path)
-        finally:
-            if tmp.exists():
-                tmp.unlink()
+        atomic_write_json(
+            path,
+            {
+                "version": SCHEMA_VERSION,
+                "accounts": {name: acct.to_dict() for name, acct in accounts.items()},
+            },
+        )
 
     @contextmanager
     def locked(self) -> Iterator[LockedStore]:
@@ -283,8 +266,8 @@ class Store:
         with self._write_lock():
             yield LockedStore(self)
 
-    def _write_lock(self) -> _FlockGuard:
-        return _FlockGuard(self._paths.lock_file)
+    def _write_lock(self) -> AbstractContextManager[None]:
+        return file_lock(self._paths.lock_file)
 
 
 class LockedStore:
@@ -303,35 +286,3 @@ class LockedStore:
 
     def save(self, accounts: dict[str, Account]) -> None:
         self._store._save_unlocked(accounts)
-
-
-class _FlockGuard:
-    """Non-blocking flock with a total wait ceiling."""
-
-    def __init__(self, lock_path: Path) -> None:
-        self._lock_path = lock_path
-        self._fd: int | None = None
-
-    def __enter__(self) -> _FlockGuard:
-        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
-        self._fd = os.open(str(self._lock_path), os.O_CREAT | os.O_RDWR, 0o600)
-        deadline = time.time() + _LOCK_TIMEOUT_SECONDS
-        while True:
-            try:
-                fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return self
-            except BlockingIOError:
-                if time.time() > deadline:
-                    os.close(self._fd)
-                    self._fd = None
-                    raise LockTimeoutError(
-                        f"another claude-rotate writer held {self._lock_path} "
-                        f"for >{_LOCK_TIMEOUT_SECONDS}s"
-                    ) from None
-                time.sleep(0.1)
-
-    def __exit__(self, *exc: object) -> None:
-        if self._fd is not None:
-            fcntl.flock(self._fd, fcntl.LOCK_UN)
-            os.close(self._fd)
-            self._fd = None

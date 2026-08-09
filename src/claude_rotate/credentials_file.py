@@ -14,10 +14,11 @@ write path; the child process owns updates during a live session
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+from claude_rotate.account_config_dir import home_claude_dir
+from claude_rotate.config import atomic_write_json
 
 
 @dataclass(frozen=True)
@@ -67,35 +68,15 @@ class CredentialsPayload:
         )
 
 
-def _home_claude_dir() -> Path:
-    """Resolve ~/.claude honouring HOME so tests can redirect it."""
-    return Path(os.environ.get("HOME", str(Path.home()))) / ".claude"
-
-
 class CredentialsFile:
     """Owns the path and atomic IO for a .credentials.json file."""
 
     def __init__(self, config_dir: Path | None = None) -> None:
-        self._dir = config_dir if config_dir is not None else _home_claude_dir()
+        self._dir = config_dir if config_dir is not None else home_claude_dir()
         self.path = self._dir / ".credentials.json"
 
     def write(self, payload: CredentialsPayload) -> None:
-        self._dir.mkdir(parents=True, exist_ok=True)
-
-        fd, tmp_str = tempfile.mkstemp(
-            dir=str(self._dir),
-            prefix=".credentials.json.tmp-",
-        )
-        tmp = Path(tmp_str)
-        try:
-            tmp.chmod(0o600)
-            with os.fdopen(fd, "w") as f:
-                json.dump(payload.to_json(), f, indent=2)
-                f.write("\n")
-            tmp.replace(self.path)
-        finally:
-            if tmp.exists():
-                tmp.unlink()
+        atomic_write_json(self.path, payload.to_json())
 
         # We keep no .credentials.json backups: the previous per-write snapshots
         # piled up one stale token copy per rotation/refresh (hundreds between

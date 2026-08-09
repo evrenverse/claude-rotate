@@ -7,18 +7,25 @@ otherwise (which uses XDG on Linux and ~/Library on macOS).
 
 from __future__ import annotations
 
+import fcntl
+import json
 import os
+import tempfile
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
 from platformdirs import user_cache_path, user_config_path, user_state_path
+
+from claude_rotate.errors import LockTimeoutError
 
 APP_NAME = "claude-rotate"
 
 # Probe / selection constants (defaults; overridable via future config.json)
 PROBE_MODEL = "claude-haiku-4-5-20251001"
 PROBE_TIMEOUT_SECONDS = 12
-PROBE_COOLDOWN_SECONDS = 300
 # An account is considered ``usable`` as long as its utilisation is
 # strictly less than this percentage. 100 means "burn every account to
 # the real 429 wall before rotating away" — the deliberate default,
@@ -153,6 +160,69 @@ def paths() -> Paths:
         cache_dir=user_cache_path(APP_NAME),
         state_dir=user_state_path(APP_NAME),
     )
+
+
+LOCK_TIMEOUT_SECONDS = 10
+
+
+@contextmanager
+def file_lock(lock_path: Path, *, timeout: int = LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+    """Hold an exclusive flock on ``lock_path``, giving up after ``timeout``.
+
+    Polls a non-blocking flock rather than blocking outright, so a wedged
+    holder surfaces as ``LockTimeoutError`` instead of hanging a `run` forever.
+    Used for both accounts.json (serialising token rotation) and the session
+    registry (serialising the pick → reserve window).
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
+    deadline = time.monotonic() + timeout
+    try:
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise LockTimeoutError(
+                        f"another claude-rotate writer held {lock_path} for >{timeout}s"
+                    ) from None
+                time.sleep(0.05)
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def atomic_write_json(
+    path: Path, payload: object, *, mode: int = 0o600, indent: int | None = 2
+) -> None:
+    """Serialise ``payload`` to ``path`` atomically.
+
+    Writes a temp file in the *same* directory (so ``replace`` stays on one
+    filesystem and is therefore atomic), chmods it **before** any bytes land —
+    several of these files hold tokens, and a post-write chmod would leave a
+    window where they are world-readable — then renames it over the target. A
+    crash or full disk can only leave the temp file behind, never a truncated
+    target.
+
+    ``indent=None`` writes compact JSON, used for the high-churn cache and
+    session records where readability does not pay for the bytes.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.tmp-")
+    tmp = Path(tmp_str)
+    try:
+        tmp.chmod(mode)
+        with os.fdopen(fd, "w") as f:
+            json.dump(payload, f, indent=indent, sort_keys=True)
+            f.write("\n")
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
 
 
 def ensure_dirs(p: Paths) -> None:

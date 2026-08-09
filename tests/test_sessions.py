@@ -117,11 +117,29 @@ def test_count_load_classifies_active_idle_and_reaps(tmp_path) -> None:
 
 
 def test_file_lock_acquires_and_releases(tmp_path) -> None:
-    from claude_rotate import sessions
+    from claude_rotate.config import file_lock
 
     p = _paths(tmp_path)
-    with sessions.file_lock(p.sessions_lock):
+    with file_lock(p.sessions_lock):
         pass  # acquire + release without error
     # second acquisition after release also works
-    with sessions.file_lock(p.sessions_lock):
+    with file_lock(p.sessions_lock):
         assert p.sessions_lock.exists()
+
+
+def test_file_lock_times_out_while_another_holder_has_it(tmp_path) -> None:
+    """The wait ceiling must surface as LockTimeoutError, not hang forever."""
+    import pytest
+
+    from claude_rotate.config import file_lock
+    from claude_rotate.errors import LockTimeoutError
+
+    p = _paths(tmp_path)
+
+    def take_it_again() -> None:
+        # A second fd for the same file cannot take the exclusive lock.
+        with file_lock(p.sessions_lock, timeout=0):
+            pass
+
+    with file_lock(p.sessions_lock), pytest.raises(LockTimeoutError):
+        take_it_again()
