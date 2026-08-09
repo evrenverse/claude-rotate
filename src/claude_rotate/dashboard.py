@@ -182,7 +182,11 @@ def row_from_cache(
     drifting apart (they carried eight near-identical copies of it).
     """
     cached = cache.load(candidate.account.name)
-    if cached is None:
+    # An entry carrying no usage at all is not a fallback. ``update_scoped``
+    # writes a minimal entry holding only ``w7_scoped``; that loads as ok with
+    # both percentages None, and treating it as data would put the account back
+    # in the selection pool as "usable" with entirely unknown quota.
+    if cached is None or (cached.h5_pct is None and cached.w7_pct is None):
         note = NO_DATA_NOTES.get(probe_error.split(":")[0], "")
         return None, DashboardRow(
             account=candidate.account,

@@ -129,12 +129,15 @@ def compute_limit_eta(
     elapsed = window_secs - reset_secs
     if elapsed <= 0:
         return None
-    p = int(pct)
-    if p <= 0 or p >= 100:
+    if pct <= 0 or pct >= 100:
         return None
     horizon = reset_secs if horizon_secs is None else min(reset_secs, horizon_secs)
     if rate_per_sec is None:
-        eta = (100 - p) * elapsed // p
+        # Must not truncate ``pct`` — ``compute_forecast`` does not either, and
+        # the two have to agree: forecast >= 100 exactly when the ETA lands
+        # within the horizon. Truncating here made 50.5% render "→101%" with an
+        # empty ETA column.
+        eta = int((100 - pct) * elapsed / pct)
     else:
         eff_rate = _blended_rate(pct, elapsed, rate_per_sec)
         if eff_rate <= 0:

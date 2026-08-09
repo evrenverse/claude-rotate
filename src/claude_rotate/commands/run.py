@@ -30,6 +30,7 @@ from claude_rotate.dashboard import (
     render_stale_footer,
     row_from_cache,
 )
+from claude_rotate.errors import LockTimeoutError
 from claude_rotate.exec import exec_claude
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import ProbeResult, probe_many
@@ -88,14 +89,22 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     with contextlib.suppress(Exception):
         refresh_stale_accounts(paths)
 
-    # Pre-run reconcile: pull any drift the cron hasn't picked up yet.
-    with contextlib.suppress(Exception):
+    # Pre-run reconcile: pull any drift the cron hasn't picked up yet. If the
+    # lock is contended the reconcile is skipped — and so is the refresh below,
+    # because accounts.json may still hold a token the running session already
+    # spent, and re-sending it would trip reuse detection.
+    reconciled = True
+    try:
         from claude_rotate.sync import reconcile_isolated
 
         if load_config(paths).session_isolation:
             reconcile_isolated(paths, now=datetime.now(UTC))
         else:
             reconcile_all(paths, now=datetime.now(UTC))
+    except LockTimeoutError:
+        reconciled = False
+    except Exception:
+        pass  # reconcile is best-effort; a live probe still follows
 
     store = Store(paths)
     accounts = store.load()
@@ -116,12 +125,13 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     # — the child claude boots with whatever we could refresh (or not)
     # and may show the dreaded login prompt. Refreshing up-front keeps
     # every account usable and the dashboard honest.
-    with contextlib.suppress(Exception):
-        isolated = load_config(paths).session_isolation
-        refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC), isolated=isolated)
-        if refreshed:
-            # accounts.json was rewritten — reload so probe sees fresh tokens
-            accounts = store.load()
+    if reconciled:
+        with contextlib.suppress(Exception):
+            isolated = load_config(paths).session_isolation
+            refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC), isolated=isolated)
+            if refreshed:
+                # accounts.json was rewritten — reload so probe sees fresh tokens
+                accounts = store.load()
 
     # Probe every account so the dashboard is always complete — pinning
     # only constrains the selection pool, not what the user sees.

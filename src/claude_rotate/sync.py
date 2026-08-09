@@ -35,7 +35,7 @@ from pathlib import Path
 from claude_rotate.accounts import LockedStore, Store
 from claude_rotate.config import Paths, atomic_write_json
 from claude_rotate.credentials_file import CredentialsPayload, read_credentials, write_credentials
-from claude_rotate.errors import ClaudeRotateError, LockTimeoutError
+from claude_rotate.errors import ClaudeRotateError
 from claude_rotate.oauth import refresh_access_token
 from claude_rotate.refresh_policy import should_refresh
 
@@ -78,39 +78,38 @@ def reconcile_once(
     The whole load → compare → save runs under the accounts.json lock. Without
     it, a save built from a stale read would clobber a token another process
     rotated in the meantime, re-arming an already-spent refresh token.
+
+    Raises ``LockTimeoutError`` when the lock could not be taken. Callers must
+    not go on to refresh tokens in that case: an un-reconciled credentials file
+    means accounts.json may still hold a refresh token the running session has
+    already spent, and re-sending it trips reuse detection.
     """
     session = read_current_session(paths)
     if session is None:
         return False
 
-    store = Store(paths)
-    try:
-        with store.locked() as locked:
-            all_accounts = locked.load()
-            stored = all_accounts.get(session.account_name)
-            if stored is None:
-                return False
+    with Store(paths).locked() as locked:
+        all_accounts = locked.load()
+        stored = all_accounts.get(session.account_name)
+        if stored is None:
+            return False
 
-            access_changed = payload.access_token != stored.runtime_token
-            refresh_changed = payload.refresh_token != stored.refresh_token
-            if not access_changed and not refresh_changed:
-                return False
+        access_changed = payload.access_token != stored.runtime_token
+        refresh_changed = payload.refresh_token != stored.refresh_token
+        if not access_changed and not refresh_changed:
+            return False
 
-            all_accounts[session.account_name] = replace(
-                stored,
-                runtime_token=payload.access_token,
-                refresh_token=payload.refresh_token,
-                runtime_token_obtained_at=(
-                    now if access_changed else stored.runtime_token_obtained_at
-                ),
-                refresh_token_obtained_at=(
-                    now if refresh_changed else stored.refresh_token_obtained_at
-                ),
-            )
-            locked.save(all_accounts)
-            return True
-    except LockTimeoutError:
-        return False  # another writer is mid-rotation; the next tick retries
+        all_accounts[session.account_name] = replace(
+            stored,
+            runtime_token=payload.access_token,
+            refresh_token=payload.refresh_token,
+            runtime_token_obtained_at=(now if access_changed else stored.runtime_token_obtained_at),
+            refresh_token_obtained_at=(
+                now if refresh_changed else stored.refresh_token_obtained_at
+            ),
+        )
+        locked.save(all_accounts)
+        return True
 
 
 def reconcile_all(paths: Paths, *, now: datetime) -> bool:
@@ -129,19 +128,15 @@ def reconcile_isolated(paths: Paths, *, now: datetime) -> list[str]:
     session rotates tokens inside its own dir, so we read every account dir
     and write any drift back. Returns the names that changed.
 
-    Held under the accounts.json lock for the same reason as ``reconcile_once``:
-    the per-account files are only read here, so the critical section stays
-    short, and a concurrent rotation cannot be overwritten from a stale read.
+    Held under the accounts.json lock for the same reason as ``reconcile_once``,
+    and raises ``LockTimeoutError`` on contention for the same reason: a caller
+    that refreshed anyway could re-send an already-spent refresh token.
     """
     base = paths.account_configs_dir
     if not base.is_dir():
         return []
-    store = Store(paths)
-    try:
-        with store.locked() as locked:
-            return _reconcile_isolated_locked(locked, base, now=now)
-    except LockTimeoutError:
-        return []  # another writer is mid-rotation; the next tick retries
+    with Store(paths).locked() as locked:
+        return _reconcile_isolated_locked(locked, base, now=now)
 
 
 def _reconcile_isolated_locked(
