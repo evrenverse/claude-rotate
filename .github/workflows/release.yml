@@ -1,9 +1,12 @@
 # .github/workflows/release.yml
 #
-# Triggered by pushing an annotated tag like ``v0.2.0``. Always creates a
-# GitHub Release with auto-generated notes; also publishes to PyPI when
-# Trusted Publishing is configured on the ``pypi`` environment (if not,
-# that step is skipped cleanly instead of failing the workflow).
+# Triggered by pushing an annotated tag like ``v0.2.0``. Builds the wheel and
+# sdist and attaches them to a GitHub Release.
+#
+# This project is deliberately NOT published to PyPI — it is installed from the
+# repo with ``uv tool install``. A PyPI job used to live here, dormant behind a
+# ``vars.PYPI_ENABLED`` flag; it was removed so that setting up Trusted
+# Publishing some day cannot silently start publishing.
 name: Release
 
 on:
@@ -13,7 +16,6 @@ on:
 
 permissions:
   contents: write        # required to create GitHub Releases
-  id-token: write        # required for PyPI Trusted Publishing
 
 jobs:
   build:
@@ -59,27 +61,11 @@ jobs:
           name: dist
           path: dist/
 
-      - name: Create GitHub Release
+      # Idempotent on purpose: if the release was already created by hand (or
+      # the workflow is re-run), update it instead of failing the whole run.
+      - name: Create or update GitHub Release
         uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: dist/*
           fail_on_unmatched_files: false
-
-  pypi_publish:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    # Only runs when the maintainer has configured Trusted Publishing on
-    # pypi.org and created a ``pypi`` environment on the repo. If either
-    # piece is missing the job is skipped instead of failing the release.
-    if: ${{ vars.PYPI_ENABLED == 'true' }}
-    steps:
-      - name: Download build artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: dist
-          path: dist/
-
-      - name: Upload to PyPI via Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
