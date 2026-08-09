@@ -27,15 +27,13 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
-import tempfile
 import urllib.error
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 from claude_rotate.accounts import LockedStore, Store
-from claude_rotate.config import Paths
+from claude_rotate.config import Paths, atomic_write_json
 from claude_rotate.credentials_file import CredentialsPayload, read_credentials, write_credentials
 from claude_rotate.errors import ClaudeRotateError, LockTimeoutError
 from claude_rotate.oauth import refresh_access_token
@@ -49,20 +47,7 @@ class CurrentSession:
 
 def write_current_session(paths: Paths, session: CurrentSession) -> None:
     """Write current-session.json atomically. Mode 0o600 (tokens nearby)."""
-    path = paths.current_session_file
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-session-")
-    tmp = Path(tmp_str)
-    try:
-        tmp.chmod(0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump({"account_name": session.account_name}, f)
-            f.write("\n")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    atomic_write_json(paths.current_session_file, {"account_name": session.account_name})
 
 
 def read_current_session(paths: Paths) -> CurrentSession | None:

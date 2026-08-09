@@ -8,8 +8,6 @@ at read time. Entries older than MAX_CACHE_AGE are ignored.
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -18,6 +16,7 @@ from claude_rotate.config import (
     USAGE_HISTORY_MAX_POINTS,
     USAGE_HISTORY_RETENTION_SECONDS,
     Paths,
+    atomic_write_json,
 )
 from claude_rotate.probe import ProbeResult
 from claude_rotate.selection import ScopedLimit
@@ -207,14 +206,8 @@ class UsageCache:
         self._atomic_write(self._path_for(name), raw)
 
     def _atomic_write(self, path: Path, payload: object) -> None:
-        fd, tmp = tempfile.mkstemp(dir=str(self._paths.usage_dir), prefix=".tmp-")
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(payload, f)
-            os.replace(tmp, str(path))
-        finally:
-            if os.path.exists(tmp):
-                os.unlink(tmp)
+        # Cache files hold no secrets and churn on every probe: 0o644, compact.
+        atomic_write_json(path, payload, mode=0o644, indent=None)
 
     def _load_history(self, name: str) -> list[list[float | None]]:
         try:

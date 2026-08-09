@@ -20,9 +20,7 @@ def test_parse_usage_response_ok() -> None:
     assert r.http_code == 200
     assert r.h5_pct == 8.0
     assert r.w7_pct == 89.0
-    assert r.w7_sonnet_pct == 21.0
     assert r.w7_opus_pct is None  # seven_day_opus is null in fixture
-    assert r.extra_usage_enabled is False
     assert r.h5_reset_secs > 0
     assert r.w7_reset_secs > 0
 
@@ -40,12 +38,11 @@ def test_parse_usage_response_null_buckets() -> None:
     assert r.ok
     assert r.h5_pct is None
     assert r.w7_pct is None
-    assert r.w7_sonnet_pct is None
     assert r.w7_opus_pct is None
-    assert r.extra_usage_enabled is False
 
 
-def test_parse_usage_response_extra_usage_enabled() -> None:
+def test_parse_usage_response_ignores_unconsumed_buckets() -> None:
+    """Buckets we do not model must not derail the ones we do."""
     body: dict = {
         "five_hour": {"utilization": 0.0, "resets_at": None},
         "seven_day": {"utilization": 50.0, "resets_at": None},
@@ -55,7 +52,6 @@ def test_parse_usage_response_extra_usage_enabled() -> None:
     }
     r = parse_usage_response(200, body, now=_NOW)
     assert r.ok
-    assert r.extra_usage_enabled is True
     assert r.w7_pct == 50.0
 
 
@@ -91,9 +87,7 @@ def test_merge_opus_usage_takes_buckets_from_oauth_keeps_unified() -> None:
         w7_pct=22.0,
         h5_reset_secs=99,
         w7_reset_secs=199,
-        w7_sonnet_pct=33.0,
         w7_opus_pct=44.0,
-        extra_usage_enabled=True,
     )
     merged = merge_opus_usage(base, oauth)
     # Unified numbers stay from the headers (exact); only the buckets the
@@ -102,9 +96,7 @@ def test_merge_opus_usage_takes_buckets_from_oauth_keeps_unified() -> None:
     assert merged.w7_pct == 20.0
     assert merged.h5_reset_secs == 100
     assert merged.w7_reset_secs == 200
-    assert merged.w7_sonnet_pct == 33.0
     assert merged.w7_opus_pct == 44.0
-    assert merged.extra_usage_enabled is True
 
 
 def test_merge_opus_usage_failed_or_missing_oauth_returns_base() -> None:

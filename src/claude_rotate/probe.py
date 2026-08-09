@@ -33,12 +33,11 @@ class ProbeResult:
     w7_pct: float | None = None
     h5_reset_secs: int = 0
     w7_reset_secs: int = 0
-    # Extended fields from the OAuth usage endpoint when available.
-    w7_sonnet_pct: float | None = None
+    # Per-model bucket from the OAuth usage endpoint; feeds the selection
+    # dampener in ``selection._opus_availability``.
     w7_opus_pct: float | None = None
     # Model-scoped weekly limits from the ``limits`` array (e.g. Fable).
     w7_scoped: tuple[ScopedLimit, ...] = ()
-    extra_usage_enabled: bool = False
     error: str = ""
     request_id: str | None = None
 
@@ -141,9 +140,7 @@ def parse_usage_response(http_code: int, body: dict[str, Any], *, now: int) -> P
 
     five = body.get("five_hour") or {}
     seven = body.get("seven_day") or {}
-    sonnet = body.get("seven_day_sonnet") or {}
     opus = body.get("seven_day_opus") or {}
-    extra = body.get("extra_usage") or {}
 
     # The ``limits`` array (added with Fable 5) carries model-scoped weekly
     # windows the legacy top-level buckets don't: kind=weekly_scoped entries
@@ -171,10 +168,8 @@ def parse_usage_response(http_code: int, body: dict[str, Any], *, now: int) -> P
         w7_pct=float(seven["utilization"]) if "utilization" in seven else None,
         h5_reset_secs=_secs_until(five.get("resets_at")),
         w7_reset_secs=_secs_until(seven.get("resets_at")),
-        w7_sonnet_pct=float(sonnet["utilization"]) if sonnet and "utilization" in sonnet else None,
         w7_opus_pct=float(opus["utilization"]) if opus and "utilization" in opus else None,
         w7_scoped=tuple(scoped),
-        extra_usage_enabled=bool(extra.get("is_enabled", False)),
     )
 
 
@@ -217,10 +212,8 @@ def merge_opus_usage(base: ProbeResult, oauth: ProbeResult | None) -> ProbeResul
         return base
     return replace(
         base,
-        w7_sonnet_pct=oauth.w7_sonnet_pct,
         w7_opus_pct=oauth.w7_opus_pct,
         w7_scoped=oauth.w7_scoped,
-        extra_usage_enabled=oauth.extra_usage_enabled,
     )
 
 

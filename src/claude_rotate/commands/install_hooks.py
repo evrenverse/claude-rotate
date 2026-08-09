@@ -13,13 +13,11 @@ accounts. The hook learns its account/session from the injected env vars.
 from __future__ import annotations
 
 import json
-import os
 import sys
-import tempfile
 from pathlib import Path
 from typing import Any
 
-from claude_rotate.config import Paths
+from claude_rotate.config import Paths, atomic_write_json
 from claude_rotate.errors import ConfigError
 
 # (claude-code hook event, command). These events take no tool matcher.
@@ -50,20 +48,8 @@ def _load(settings_path: Path) -> dict[str, Any]:
 
 
 def _save(settings_path: Path, data: dict[str, Any]) -> None:
-    # Atomic write: serialise to a temp file in the same dir, then os.replace
-    # onto the target so a crash/disk-full mid-write never truncates the user's
-    # real settings.json. (Not secret, so no chmod 0600 — unlike credentials.)
-    settings_path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_str = tempfile.mkstemp(dir=str(settings_path.parent), prefix=".settings.json.tmp-")
-    tmp = Path(tmp_str)
-    try:
-        with os.fdopen(fd, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
-        tmp.replace(settings_path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    # Not secret, so 0o644 — unlike the credential and account files.
+    atomic_write_json(settings_path, data, mode=0o644)
 
 
 def _event_has_command(groups: list[Any], command: str) -> bool:

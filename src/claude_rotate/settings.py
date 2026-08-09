@@ -15,11 +15,9 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass, replace
-from pathlib import Path
 
-from claude_rotate.config import Paths
+from claude_rotate.config import Paths, atomic_write_json
 from claude_rotate.errors import ConfigError
 
 DEFAULT_RESUME_MESSAGE = "weiter gehts"
@@ -67,25 +65,17 @@ def save_config(paths: Paths, cfg: RotateConfig) -> None:
     path = paths.config_file
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)
-    payload = {
-        "session_isolation": cfg.session_isolation,
-        "auto_resume": {
-            "enabled": cfg.auto_resume_enabled,
-            "message": cfg.auto_resume_message,
+    atomic_write_json(
+        path,
+        {
+            "session_isolation": cfg.session_isolation,
+            "auto_resume": {
+                "enabled": cfg.auto_resume_enabled,
+                "message": cfg.auto_resume_message,
+            },
+            "session_tracking": cfg.session_tracking,
         },
-        "session_tracking": cfg.session_tracking,
-    }
-    fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=".config.json.tmp-")
-    tmp = Path(tmp_str)
-    try:
-        tmp.chmod(0o600)
-        with os.fdopen(fd, "w") as f:
-            json.dump(payload, f, indent=2)
-            f.write("\n")
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+    )
 
 
 def _coerce_bool(value: str) -> bool:
