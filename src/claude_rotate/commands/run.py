@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from rich.console import Console
 
 from claude_rotate import sessions
-from claude_rotate.accounts import Store
+from claude_rotate.accounts import Account, Store
 from claude_rotate.config import (
     SESSION_ACTIVE_WINDOW_SECONDS,
     SESSION_IDLE_WEIGHT,
@@ -30,7 +30,6 @@ from claude_rotate.dashboard import (
     render_stale_footer,
     row_from_cache,
 )
-from claude_rotate.errors import LockTimeoutError
 from claude_rotate.exec import exec_claude
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import ProbeResult, probe_many
@@ -63,6 +62,24 @@ def _reserve_record(paths: Paths, account_name: str) -> str:
         ),
     )
     return run_uuid
+
+
+def _maybe_refresh(account: Account, paths: Paths, *, reconciled: bool) -> Account:
+    """Pre-refresh this account's access token, unless the reconcile was skipped.
+
+    ``ensure_fresh`` re-reads accounts.json under the lock, which protects it
+    against *another process* rotating the token — but not against the running
+    session rotating its own credentials file without that drift having been
+    synced back. With an un-reconciled store the refresh token on disk may
+    already be spent, and re-sending it trips Anthropic's reuse detection and
+    revokes the whole family.
+
+    So when the reconcile did not run we launch with whatever token is stored.
+    That token may be expired, in which case claude refreshes it itself or
+    prompts — a far cheaper failure than a revoked family, and the same
+    degradation ``ensure_fresh`` already falls back to on any error.
+    """
+    return ensure_fresh(account, paths) if reconciled else account
 
 
 def _rewrite_pinned_wait(
@@ -101,10 +118,11 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             reconcile_isolated(paths, now=datetime.now(UTC))
         else:
             reconcile_all(paths, now=datetime.now(UTC))
-    except LockTimeoutError:
-        reconciled = False
     except Exception:
-        pass  # reconcile is best-effort; a live probe still follows
+        # Any failure — lock contention, a stat() error mid-iteration, an
+        # unreadable store — leaves accounts.json possibly un-reconciled, so
+        # treat them alike and skip every token refresh below.
+        reconciled = False
 
     store = Store(paths)
     accounts = store.load()
@@ -198,7 +216,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         )
         StateLog(paths).event("exec", chosen=first.name, reason="no_probe_data")
         _emit_rows(dashboard_rows, chosen=first.name)
-        fresh = ensure_fresh(first, paths)
+        fresh = _maybe_refresh(first, paths, reconciled=reconciled)
         if cfg.session_tracking:
             return exec_claude(
                 fresh, paths, claude_args, session_uuid=_reserve_record(paths, first.name)
@@ -221,7 +239,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             w7_pct=best.w7_pct,
             wait=wait_msg,
         )
-        fresh = ensure_fresh(best.account, paths)
+        fresh = _maybe_refresh(best.account, paths, reconciled=reconciled)
         return exec_claude(fresh, paths, claude_args)
 
     with file_lock(paths.sessions_lock):
@@ -251,7 +269,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         w7_pct=best.w7_pct,
         wait=wait_msg,
     )
-    fresh = ensure_fresh(best.account, paths)
+    fresh = _maybe_refresh(best.account, paths, reconciled=reconciled)
     return exec_claude(fresh, paths, claude_args, session_uuid=run_uuid)
 
 
