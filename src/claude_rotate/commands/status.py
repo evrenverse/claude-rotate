@@ -24,17 +24,20 @@ from claude_rotate import sessions
 from claude_rotate.accounts import Store
 from claude_rotate.config import SESSION_ACTIVE_WINDOW_SECONDS, Paths
 from claude_rotate.dashboard import (
+    NO_DATA_NOTES,
     DashboardRow,
     attach_forecast_rates,
     forecast_enabled,
+    relogin_row,
     render_dashboard,
     render_stale_footer,
+    row_from_cache,
     status_json,
 )
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import probe_many
 from claude_rotate.report import build_report
-from claude_rotate.selection import is_usable, pick_best
+from claude_rotate.selection import is_usable, pick_best, selection_pool
 from claude_rotate.sync import read_current_session
 from claude_rotate.usage_cache import UsageCache
 
@@ -96,169 +99,25 @@ def _collect(paths: Paths) -> _Collected:
     relogin_count = 0
     for c in candidates:
         if c.h5_pct is None and c.w7_pct is None:
-            # Live probe failed — classify by the error type
+            # Live probe failed — a 401/403 needs user action, everything else
+            # falls back to the usage cache and stays in the selection pool.
             err = c.probe_error
             if err == "unauthorized":
                 relogin_count += 1
-                rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=None,
-                        w7_pct=None,
-                        h5_reset_secs=0,
-                        w7_reset_secs=0,
-                        status="relogin",
-                        note="token invalid (401/403)",
-                    )
-                )
+                rows.append(relogin_row(c.account, "token invalid (401/403)"))
                 continue
-            if err == "rate_limited":
-                # A 429 without rate-limit headers is a probe failure, not
-                # trustworthy quota data. Prefer cached numbers; keep the
-                # candidate in ``resolved`` so selection can still consider it.
-                cached = cache.load(c.account.name)
-                if cached is not None:
-                    c = replace(
-                        c,
-                        h5_pct=cached.h5_pct,
-                        w7_pct=cached.w7_pct,
-                        h5_reset_secs=cached.h5_reset_secs,
-                        w7_reset_secs=cached.w7_reset_secs,
-                        w7_scoped=cached.w7_scoped,
-                    )
-                    rows.append(
-                        DashboardRow(
-                            account=c.account,
-                            h5_pct=c.h5_pct,
-                            w7_pct=c.w7_pct,
-                            h5_reset_secs=c.h5_reset_secs,
-                            w7_reset_secs=c.w7_reset_secs,
-                            from_cache=True,
-                            w7_scoped=c.w7_scoped,
-                        )
-                    )
-                    resolved.append(c)
-                else:
-                    rows.append(
-                        DashboardRow(
-                            account=c.account,
-                            h5_pct=None,
-                            w7_pct=None,
-                            h5_reset_secs=0,
-                            w7_reset_secs=0,
-                            status="no_data",
-                            note="probe API rate-limited; no cached data",
-                        )
-                    )
+            filled, row = row_from_cache(c, cache, probe_error=err)
+            if filled is not None:
+                rows.append(row)
+                resolved.append(filled)
                 continue
-            if err == "upstream_error":
-                cached = cache.load(c.account.name)
-                if cached is not None:
-                    c = replace(
-                        c,
-                        h5_pct=cached.h5_pct,
-                        w7_pct=cached.w7_pct,
-                        h5_reset_secs=cached.h5_reset_secs,
-                        w7_reset_secs=cached.w7_reset_secs,
-                        w7_scoped=cached.w7_scoped,
-                    )
-                    rows.append(
-                        DashboardRow(
-                            account=c.account,
-                            h5_pct=c.h5_pct,
-                            w7_pct=c.w7_pct,
-                            h5_reset_secs=c.h5_reset_secs,
-                            w7_reset_secs=c.w7_reset_secs,
-                            from_cache=True,
-                            w7_scoped=c.w7_scoped,
-                        )
-                    )
-                    resolved.append(c)
-                    continue
-                rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=None,
-                        w7_pct=None,
-                        h5_reset_secs=0,
-                        w7_reset_secs=0,
-                        status="no_data",
-                        note="API 5xx — retry later",
-                    )
-                )
-                continue
-            if err == "timeout" or err.startswith("network_error"):
-                cached = cache.load(c.account.name)
-                if cached is not None:
-                    c = replace(
-                        c,
-                        h5_pct=cached.h5_pct,
-                        w7_pct=cached.w7_pct,
-                        h5_reset_secs=cached.h5_reset_secs,
-                        w7_reset_secs=cached.w7_reset_secs,
-                        w7_scoped=cached.w7_scoped,
-                    )
-                    rows.append(
-                        DashboardRow(
-                            account=c.account,
-                            h5_pct=c.h5_pct,
-                            w7_pct=c.w7_pct,
-                            h5_reset_secs=c.h5_reset_secs,
-                            w7_reset_secs=c.w7_reset_secs,
-                            from_cache=True,
-                            w7_scoped=c.w7_scoped,
-                        )
-                    )
-                    resolved.append(c)
-                    continue
-                rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=None,
-                        w7_pct=None,
-                        h5_reset_secs=0,
-                        w7_reset_secs=0,
-                        status="no_data",
-                        note="network error",
-                    )
-                )
-                continue
-            # Unknown error or no error string — try cache fallback
-            cached = cache.load(c.account.name)
-            if cached is not None:
-                c = replace(
-                    c,
-                    h5_pct=cached.h5_pct,
-                    w7_pct=cached.w7_pct,
-                    h5_reset_secs=cached.h5_reset_secs,
-                    w7_reset_secs=cached.w7_reset_secs,
-                    w7_scoped=cached.w7_scoped,
-                )
-                rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=c.h5_pct,
-                        w7_pct=c.w7_pct,
-                        h5_reset_secs=c.h5_reset_secs,
-                        w7_reset_secs=c.w7_reset_secs,
-                        from_cache=True,
-                        w7_scoped=c.w7_scoped,
-                    )
-                )
-                resolved.append(c)
-                continue
-            relogin_count += 1
-            rows.append(
-                DashboardRow(
-                    account=c.account,
-                    h5_pct=None,
-                    w7_pct=None,
-                    h5_reset_secs=0,
-                    w7_reset_secs=0,
-                    status="relogin",
-                    note="probe failed (token may be expired)",
-                )
-            )
+            # No cached data either. A recognised transport failure is
+            # reported as such; an unknown one most likely means a dead token.
+            if err in NO_DATA_NOTES or err.split(":")[0] in NO_DATA_NOTES:
+                rows.append(row)
+            else:
+                relogin_count += 1
+                rows.append(relogin_row(c.account, "probe failed (token may be expired)"))
             continue
         if c.w7_scoped:
             # A successful scoped fetch is rare (the OAuth endpoint 429s
@@ -279,22 +138,13 @@ def _collect(paths: Paths) -> _Collected:
         )
         resolved.append(c)
 
-    # Selection must honour disabling + pinning — same logic as run.py so the
-    # dashboard agrees on which account gets the ``>``/``★`` marker. Disabled
-    # accounts are excluded entirely (and never fall back into the pool); if
-    # nothing usable remains, ``chosen`` stays None.
-    pinned_names = {a.name for a in accounts.values() if a.pinned}
-    disabled_names = {a.name for a in accounts.values() if a.disabled}
-    enabled = [c for c in resolved if c.account.name not in disabled_names]
-    selection_pool = (
-        [c for c in enabled if c.account.name in pinned_names] if pinned_names else enabled
-    )
-    if not selection_pool:
-        selection_pool = enabled  # pinned failed probe → fall back to enabled only
+    # Shared with run.py so the dashboard's ``>`` marker names the account run
+    # would actually launch. If nothing is eligible, ``chosen`` stays None.
+    pool = selection_pool(resolved, accounts)
 
     chosen = None
-    if selection_pool:
-        best, _ = pick_best(selection_pool)
+    if pool:
+        best, _ = pick_best(pool)
         chosen = best.account.name
 
     session = read_current_session(paths)

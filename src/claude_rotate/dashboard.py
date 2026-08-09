@@ -56,8 +56,6 @@ __all__ = [
     "DashboardRow",
     "attach_forecast_rates",
     "compact_one_liner",
-    "compute_forecast",
-    "compute_limit_eta",
     "fmt_sub_expiry",
     "forecast_enabled",
     "gradient_bar",
@@ -153,6 +151,79 @@ class _RateSource(Protocol):
         tail_secs: int,
         min_span: int,
     ) -> float | None: ...
+
+
+class _CacheSource(Protocol):
+    def load(self, name: str) -> Any: ...
+
+
+# Why a live probe failed -> what to tell the user when the cache is empty too.
+# Anything not listed here (including an empty error) renders a bare no_data row.
+NO_DATA_NOTES = {
+    "rate_limited": "probe API rate-limited; no cached data",
+    "upstream_error": "API 5xx — retry later",
+    "timeout": "network error",
+    "network_error": "network error",
+}
+
+
+def row_from_cache(
+    candidate: Any, cache: _CacheSource, *, probe_error: str = ""
+) -> tuple[Any | None, DashboardRow]:
+    """Back-fill a failed probe from the usage cache.
+
+    Returns ``(candidate, row)``. The candidate is the cache-filled copy when
+    the cache had usable data and ``None`` when it did not — callers drop the
+    ``None`` ones from the selection pool but still render the returned row, so
+    an account never silently disappears from the dashboard.
+
+    ``run`` and ``status`` classify probe failures slightly differently but
+    recover identically; keeping the recovery here is what stops the two from
+    drifting apart (they carried eight near-identical copies of it).
+    """
+    cached = cache.load(candidate.account.name)
+    if cached is None:
+        note = NO_DATA_NOTES.get(probe_error.split(":")[0], "")
+        return None, DashboardRow(
+            account=candidate.account,
+            h5_pct=None,
+            w7_pct=None,
+            h5_reset_secs=0,
+            w7_reset_secs=0,
+            status="no_data",
+            note=note,
+        )
+    filled = replace(
+        candidate,
+        h5_pct=cached.h5_pct,
+        w7_pct=cached.w7_pct,
+        h5_reset_secs=cached.h5_reset_secs,
+        w7_reset_secs=cached.w7_reset_secs,
+        w7_opus_pct=cached.w7_opus_pct,
+        w7_scoped=cached.w7_scoped,
+    )
+    return filled, DashboardRow(
+        account=filled.account,
+        h5_pct=filled.h5_pct,
+        w7_pct=filled.w7_pct,
+        h5_reset_secs=filled.h5_reset_secs,
+        w7_reset_secs=filled.w7_reset_secs,
+        from_cache=True,
+        w7_scoped=filled.w7_scoped,
+    )
+
+
+def relogin_row(account: Account, note: str) -> DashboardRow:
+    """A row for an account whose token needs user action."""
+    return DashboardRow(
+        account=account,
+        h5_pct=None,
+        w7_pct=None,
+        h5_reset_secs=0,
+        w7_reset_secs=0,
+        status="relogin",
+        note=note,
+    )
 
 
 def attach_forecast_rates(
