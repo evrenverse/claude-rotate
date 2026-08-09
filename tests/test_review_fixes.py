@@ -293,3 +293,97 @@ def test_credentials_roundtrip_still_works(tmp_path: Path) -> None:
     CredentialsFile(tmp_path).write(payload)
     assert json.loads((tmp_path / ".credentials.json").read_text())["claudeAiOauth"]
     assert CredentialsFile(tmp_path).read() == payload
+
+
+# ---------------------------------------------------------------------------
+# 5. Follow-up review: a failed reconcile must not be followed by a refresh
+# ---------------------------------------------------------------------------
+
+
+def test_sync_credentials_skips_refresh_when_reconcile_is_locked_out(
+    store_paths: Paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A contended lock must abort the whole tick, not just the reconcile.
+
+    accounts.json may still hold a refresh token the running session already
+    spent; sending it would trip reuse detection and revoke the family.
+    """
+    from claude_rotate.commands import sync_credentials
+    from claude_rotate.errors import LockTimeoutError
+
+    Store(store_paths).save({"work": _account("work")})
+
+    def locked_out(*_a: object, **_k: object) -> list[str]:
+        raise LockTimeoutError("held by another writer")
+
+    refreshed_called = []
+    monkeypatch.setattr(sync_credentials, "reconcile_all", locked_out)
+    monkeypatch.setattr(
+        sync_credentials,
+        "refresh_stale_tokens",
+        lambda *a, **k: refreshed_called.append(True) or [],
+    )
+
+    assert sync_credentials.execute(store_paths) == 0
+    assert refreshed_called == [], "refreshed tokens despite an un-reconciled store"
+
+
+# ---------------------------------------------------------------------------
+# 6. Follow-up review: a scoped-only cache entry is not usable quota data
+# ---------------------------------------------------------------------------
+
+
+def test_row_from_cache_rejects_entry_without_usage(store_paths: Paths) -> None:
+    """``update_scoped`` writes an entry with no percentages — not a fallback.
+
+    Treating it as data would put the account back into the selection pool as
+    "usable" with entirely unknown quota.
+    """
+    from claude_rotate.dashboard import row_from_cache
+    from claude_rotate.selection import ScopedLimit, candidate_from_account
+    from claude_rotate.usage_cache import UsageCache
+
+    cache = UsageCache(store_paths)
+    cache.update_scoped("work", (ScopedLimit(label="fable", pct=5.0, reset_secs=3600),))
+
+    candidate = candidate_from_account(
+        _account("work"),
+        h5_pct=None,
+        w7_pct=None,
+        h5_reset_secs=0,
+        w7_reset_secs=0,
+        probe_error="rate_limited",
+    )
+    filled, row = row_from_cache(candidate, cache, probe_error="rate_limited")
+
+    assert filled is None, "scoped-only cache entry was treated as usable quota"
+    assert row.status == "no_data"
+
+
+# ---------------------------------------------------------------------------
+# 7. Follow-up review: forecast and limit-ETA must agree
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pct", [50.5, 60.0, 75.25, 99.5])
+def test_forecast_over_100_always_has_an_eta(pct: float) -> None:
+    """forecast >= 100 must come with an ETA inside the horizon.
+
+    compute_forecast stopped truncating pct; compute_limit_eta still did, so
+    50.5% rendered "→101%" with an empty ETA column.
+    """
+    from claude_rotate.insights import compute_forecast, compute_limit_eta
+
+    forecast = compute_forecast(pct, 9000, 18000)
+    eta = compute_limit_eta(pct, 9000, 18000)
+    assert forecast is not None and forecast >= 100
+    assert eta is not None, f"forecast {forecast}% but no ETA for pct={pct}"
+    assert eta < 9000
+
+
+def test_forecast_exactly_100_has_no_eta() -> None:
+    """The boundary: hitting 100% exactly at reset never blocks before it."""
+    from claude_rotate.insights import compute_forecast, compute_limit_eta
+
+    assert compute_forecast(50.0, 9000, 18000) == 100
+    assert compute_limit_eta(50.0, 9000, 18000) is None

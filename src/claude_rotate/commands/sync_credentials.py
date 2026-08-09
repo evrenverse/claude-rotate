@@ -21,6 +21,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from claude_rotate.config import Paths
+from claude_rotate.errors import LockTimeoutError
 from claude_rotate.settings import load_config
 from claude_rotate.sync import (
     reconcile_all,
@@ -30,6 +31,15 @@ from claude_rotate.sync import (
 
 
 def execute(paths: Paths) -> int:
+    """One cron tick: reconcile token drift, then refresh what has gone stale.
+
+    The order matters and the two steps are not independent. If the reconcile
+    cannot run — another writer holds the accounts.json lock — accounts.json may
+    still carry a refresh token the running session has already spent. Sending
+    that token trips Anthropic's reuse detection and revokes the family, so a
+    failed reconcile skips the refresh entirely and leaves both to the next tick
+    (two minutes later).
+    """
     now = datetime.now(UTC)
 
     if load_config(paths).session_isolation:
@@ -41,7 +51,10 @@ def execute(paths: Paths) -> int:
         # org-scoped prompt cache. Headless consumers must pin an account via
         # CLAUDE_CONFIG_DIR=<configs>/<account> instead; those dirs stay fresh
         # through refresh_stale_tokens below.
-        synced_names = reconcile_isolated(paths, now=now)
+        try:
+            synced_names = reconcile_isolated(paths, now=now)
+        except LockTimeoutError:
+            return 0  # skip the refresh too; the next tick retries both
         refreshed = refresh_stale_tokens(paths, now=now, isolated=True)
         if synced_names or refreshed:
             stamp = datetime.now(UTC).isoformat(timespec="seconds")
@@ -53,7 +66,10 @@ def execute(paths: Paths) -> int:
                 print(f"[{stamp}] refreshed {len(refreshed)} stale account(s): {names}")
         return 0
 
-    synced = reconcile_all(paths, now=now)
+    try:
+        synced = reconcile_all(paths, now=now)
+    except LockTimeoutError:
+        return 0  # skip the refresh too; the next tick retries both
     refreshed = refresh_stale_tokens(paths, now=now)
 
     if synced or refreshed:
