@@ -18,20 +18,23 @@ from claude_rotate.config import (
     SESSION_ACTIVE_WINDOW_SECONDS,
     SESSION_IDLE_WEIGHT,
     Paths,
+    file_lock,
 )
 from claude_rotate.dashboard import (
     DashboardRow,
     attach_forecast_rates,
     compact_one_liner,
     forecast_enabled,
+    relogin_row,
     render_dashboard,
     render_stale_footer,
+    row_from_cache,
 )
 from claude_rotate.exec import exec_claude
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import ProbeResult, probe_many
 from claude_rotate.refresh import ensure_fresh
-from claude_rotate.selection import Candidate, is_usable, pick_best
+from claude_rotate.selection import Candidate, is_usable, pick_best, selection_pool
 from claude_rotate.settings import load_config
 from claude_rotate.state_log import StateLog
 from claude_rotate.sync import reconcile_all, refresh_stale_tokens
@@ -122,11 +125,11 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
 
     # Probe every account so the dashboard is always complete — pinning
     # only constrains the selection pool, not what the user sees.
-    pool = list(accounts.values())
-    pinned_names = {a.name for a in pool if a.pinned}
-    disabled_names = {a.name for a in pool if a.disabled}
+    all_accounts = list(accounts.values())
+    pinned_names = {a.name for a in all_accounts if a.pinned}
+    disabled_names = {a.name for a in all_accounts if a.disabled}
 
-    candidates = probe_many(pool)
+    candidates = probe_many(all_accounts)
     cache = UsageCache(paths)
 
     # Fill in any candidates that failed live-probe with cached values
@@ -137,93 +140,16 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             err = c.probe_error
             # Unauthorized → relogin row, skip from resolved
             if err == "unauthorized":
-                dashboard_rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=None,
-                        w7_pct=None,
-                        h5_reset_secs=0,
-                        w7_reset_secs=0,
-                        status="relogin",
-                        note="token invalid (401/403)",
-                    )
-                )
+                dashboard_rows.append(relogin_row(c.account, "token invalid (401/403)"))
                 continue
-            # A 429 without rate-limit headers is a probe failure, not
-            # trustworthy quota data. Fall back to cached usage values and
-            # keep the candidate in the selection pool.
-            if err == "rate_limited":
-                cached = cache.load(c.account.name)
-                if cached is not None:
-                    c = replace(
-                        c,
-                        h5_pct=cached.h5_pct,
-                        w7_pct=cached.w7_pct,
-                        h5_reset_secs=cached.h5_reset_secs,
-                        w7_reset_secs=cached.w7_reset_secs,
-                        w7_opus_pct=cached.w7_opus_pct,
-                        w7_scoped=cached.w7_scoped,
-                    )
-                    dashboard_rows.append(
-                        DashboardRow(
-                            account=c.account,
-                            h5_pct=c.h5_pct,
-                            w7_pct=c.w7_pct,
-                            h5_reset_secs=c.h5_reset_secs,
-                            w7_reset_secs=c.w7_reset_secs,
-                            from_cache=True,
-                            w7_scoped=c.w7_scoped,
-                        )
-                    )
-                    resolved.append(c)
-                else:
-                    dashboard_rows.append(
-                        DashboardRow(
-                            account=c.account,
-                            h5_pct=None,
-                            w7_pct=None,
-                            h5_reset_secs=0,
-                            w7_reset_secs=0,
-                            status="no_data",
-                            note="probe API rate-limited; no cached data",
-                        )
-                    )
+            # Any other failure (429 without headers, 5xx, network) is a probe
+            # failure rather than trustworthy quota data: fall back to cached
+            # usage and keep the candidate in the selection pool.
+            filled, row = row_from_cache(c, cache, probe_error=err)
+            dashboard_rows.append(row)
+            if filled is None:
                 continue
-            # Other errors — try cache fallback
-            cached = cache.load(c.account.name)
-            if cached is not None:
-                c = replace(
-                    c,
-                    h5_pct=cached.h5_pct,
-                    w7_pct=cached.w7_pct,
-                    h5_reset_secs=cached.h5_reset_secs,
-                    w7_reset_secs=cached.w7_reset_secs,
-                    w7_opus_pct=cached.w7_opus_pct,
-                    w7_scoped=cached.w7_scoped,
-                )
-                dashboard_rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=c.h5_pct,
-                        w7_pct=c.w7_pct,
-                        h5_reset_secs=c.h5_reset_secs,
-                        w7_reset_secs=c.w7_reset_secs,
-                        from_cache=True,
-                        w7_scoped=c.w7_scoped,
-                    )
-                )
-            else:
-                dashboard_rows.append(
-                    DashboardRow(
-                        account=c.account,
-                        h5_pct=None,
-                        w7_pct=None,
-                        h5_reset_secs=0,
-                        w7_reset_secs=0,
-                        status="no_data",
-                    )
-                )
-                continue
+            c = filled
         else:
             cache.save(c.account.name, _to_probe_result(c))
             dashboard_rows.append(
@@ -269,22 +195,13 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             )
         return exec_claude(fresh, paths, claude_args)
 
-    # Pinning: restrict the (already disabled-filtered) pool to the pinned
-    # account(s) only. Non-pinned accounts stay in dashboard_rows so the user
-    # still sees them.
-    selection_pool = (
-        [c for c in enabled_resolved if c.account.name in pinned_names]
-        if pinned_names
-        else enabled_resolved
-    )
-    if not selection_pool:
-        # Pinned account(s) all failed live probe; fall back to the enabled
-        # set — never to a disabled account.
-        selection_pool = enabled_resolved
+    # Non-pinned and disabled accounts stay in dashboard_rows so the user still
+    # sees them; only the selection pool narrows. Shared with status.py.
+    pool = selection_pool(resolved, accounts)
 
     if not cfg.session_tracking:
         # Tracking disabled → exact pre-feature behaviour.
-        best, wait_msg = pick_best(selection_pool)
+        best, wait_msg = pick_best(pool)
         wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
         _emit_rows(dashboard_rows, chosen=best.account.name, wait_msg=wait_msg)
         StateLog(paths).event(
@@ -297,7 +214,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         fresh = ensure_fresh(best.account, paths)
         return exec_claude(fresh, paths, claude_args)
 
-    with sessions.file_lock(paths.sessions_lock):
+    with file_lock(paths.sessions_lock):
         loads = sessions.count_load(
             paths, now=time.time(), active_window=float(SESSION_ACTIVE_WINDOW_SECONDS)
         )
@@ -308,7 +225,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
                 if c.account.name in loads
                 else 0.0,
             )
-            for c in selection_pool
+            for c in pool
         ]
         best, wait_msg = pick_best(loaded_pool)
         run_uuid = _reserve_record(paths, best.account.name)

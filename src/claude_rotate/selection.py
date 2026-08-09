@@ -149,6 +149,28 @@ def _soonest_reset_seconds(c: Candidate) -> int:
     return min(caps) if caps else 0
 
 
+def selection_pool(candidates: list[Candidate], accounts: dict[str, Account]) -> list[Candidate]:
+    """Narrow probed candidates to those eligible for auto-selection.
+
+    Disabled accounts are dropped outright — never auto-picked, not even as a
+    last resort. Pinning then restricts what remains, unless every pinned
+    account failed its probe, in which case the enabled set is used so a dead
+    pin cannot strand the launch. Callers keep rendering the full row set, so
+    excluded accounts stay visible on the dashboard.
+
+    ``run`` and ``status`` must agree here or the dashboard's ``>`` marker
+    would point at an account ``run`` would not actually pick.
+    """
+    disabled = {a.name for a in accounts.values() if a.disabled}
+    pinned = {a.name for a in accounts.values() if a.pinned}
+    enabled = [c for c in candidates if c.account.name not in disabled]
+    if pinned:
+        pinned_pool = [c for c in enabled if c.account.name in pinned]
+        if pinned_pool:
+            return pinned_pool
+    return enabled
+
+
 def pick_best(
     candidates: list[Candidate],
     now: datetime | None = None,
