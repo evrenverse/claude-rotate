@@ -387,3 +387,66 @@ def test_forecast_exactly_100_has_no_eta() -> None:
 
     assert compute_forecast(50.0, 9000, 18000) == 100
     assert compute_limit_eta(50.0, 9000, 18000) is None
+
+
+# ---------------------------------------------------------------------------
+# 8. Second review pass: NO token refresh may follow a failed reconcile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("failure", [LookupError("lock held"), OSError("stat failed")])
+def test_run_skips_every_refresh_when_reconcile_failed(
+    store_paths: Paths, monkeypatch: pytest.MonkeyPatch, failure: Exception
+) -> None:
+    """A failed reconcile must gate `ensure_fresh` too, not just the bulk refresh.
+
+    The first attempt at this guard only covered `refresh_stale_tokens`; the
+    three `ensure_fresh` calls still ran and would spend the same possibly
+    already-rotated refresh token. Any reconcile failure counts, not only lock
+    contention.
+    """
+    from claude_rotate.commands import run as run_cmd
+
+    Store(store_paths).save({"work": _account("work")})
+
+    def failing_reconcile(*_a: object, **_k: object) -> bool:
+        raise failure
+
+    refreshers: list[str] = []
+    monkeypatch.setattr(run_cmd, "reconcile_all", failing_reconcile)
+    monkeypatch.setattr(
+        run_cmd, "refresh_stale_tokens", lambda *a, **k: refreshers.append("bulk") or []
+    )
+    monkeypatch.setattr(
+        run_cmd, "ensure_fresh", lambda acct, _p: refreshers.append("ensure_fresh") or acct
+    )
+    monkeypatch.setattr(run_cmd, "probe_many", lambda accts: [])
+    monkeypatch.setattr(run_cmd, "exec_claude", lambda *a, **k: 0)
+
+    run_cmd.execute(store_paths, [])
+
+    assert refreshers == [], f"refreshed tokens after a failed reconcile: {refreshers}"
+
+
+def test_run_does_refresh_on_the_happy_path(
+    store_paths: Paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counterpart: with a clean reconcile the refresh must still happen."""
+    from claude_rotate.commands import run as run_cmd
+
+    Store(store_paths).save({"work": _account("work")})
+
+    refreshers: list[str] = []
+    monkeypatch.setattr(run_cmd, "reconcile_all", lambda *a, **k: False)
+    monkeypatch.setattr(
+        run_cmd, "refresh_stale_tokens", lambda *a, **k: refreshers.append("bulk") or []
+    )
+    monkeypatch.setattr(
+        run_cmd, "ensure_fresh", lambda acct, _p: refreshers.append("ensure_fresh") or acct
+    )
+    monkeypatch.setattr(run_cmd, "probe_many", lambda accts: [])
+    monkeypatch.setattr(run_cmd, "exec_claude", lambda *a, **k: 0)
+
+    run_cmd.execute(store_paths, [])
+
+    assert "bulk" in refreshers and "ensure_fresh" in refreshers
