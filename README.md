@@ -93,7 +93,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate login <email> <handle> --replace` | Overwrite an existing account |
 | `claude-rotate login <email> <handle> --from-env` / `--token-file <path>` | Headless login (no browser) from `CLAUDE_ROTATE_TOKEN` / a token file — grants inference-only scope |
 | `claude-rotate list` | Show configured accounts (no network) |
-| `claude-rotate status` | Live dashboard + health exit code |
+| `claude-rotate status` | Live dashboard + health exit code. Adds an *other providers* table for the Codex and Gemini subscriptions on this machine, when present |
 | `claude-rotate status --report` | Compact single-table overview: running account (`@`), next pick (`>`), per-window resets (clock + weekday + relative) and warnings |
 | `claude-rotate status --json` | Machine-readable state |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |

@@ -49,6 +49,7 @@ from claude_rotate.insights import (
     status_line,
     warning_messages,
 )
+from claude_rotate.providers import ProviderQuota, ProviderWindow
 from claude_rotate.selection import ScopedLimit
 from claude_rotate.sessions import SessionLoad
 
@@ -61,6 +62,7 @@ __all__ = [
     "gradient_bar",
     "is_unusable",
     "render_dashboard",
+    "render_providers",
     "render_stale_footer",
     "session_indicator",
     "status_json",
@@ -984,11 +986,25 @@ def status_json(
     chosen: str | None,
     active: str | None = None,
     now: datetime | None = None,
+    providers: list[ProviderQuota] | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     return {
         "chosen": chosen,
         "active": active,
+        # Always present, so consumers can rely on the key rather than probing.
+        "providers": [
+            {
+                "provider": q.provider,
+                "account": q.account,
+                "note": q.note,
+                "windows": [
+                    {"label": w.label, "used_pct": w.used_pct, "reset_secs": w.reset_secs}
+                    for w in q.windows
+                ],
+            }
+            for q in (providers or [])
+        ],
         "accounts": [
             {
                 "name": r.account.name,
@@ -1043,3 +1059,109 @@ def status_json(
             for r in rows
         ],
     }
+
+
+_PROVIDER_WINDOWS = ("5h", "week")
+_PROVIDER_BAR_MAX = 12
+_PROVIDER_BAR_MIN = 6
+# Width of the usage column, shared by the layout maths and the cell that
+# renders it — they drift apart silently otherwise, and Rich pays for it
+# by truncating the reset clock.
+_PROVIDER_PCT_W = 7
+
+
+def render_providers(
+    quotas: list[ProviderQuota],
+    *,
+    console: Console,
+    now: datetime | None = None,
+) -> None:
+    """The other subscriptions on this machine, as a table of their own.
+
+    Deliberately thinner than the Anthropic dashboard above it: bar, usage
+    and reset, nothing else. These providers have no rotation, no forecast
+    history and no subscription expiry to show, and a column for them would
+    stand empty forever.
+
+    Widths adapt like ``_render_table`` does — relative durations are dropped
+    before the bar shrinks, because a truncated reset clock is worse than no
+    ``(4h 55m)`` at all.
+    """
+    if not quotas:
+        return
+    now = now or datetime.now(UTC)
+    now_local = now.astimezone()
+
+    labels = [_provider_label(q) for q in quotas]
+    label_w = max(max(len(ln) for ln in lbl.plain.split("\n")) for lbl in labels)
+    bar_w, include_rel = _provider_layout(quotas, console.width, label_w, now_local)
+
+    table = Table(box=box.ROUNDED, padding=(0, 1), border_style="dim", header_style="bold")
+    table.add_column("", no_wrap=True)
+    for header in _PROVIDER_WINDOWS:
+        table.add_column(header, no_wrap=True)
+
+    for quota, label in zip(quotas, labels, strict=True):
+        by_label = {w.label: w for w in quota.windows}
+        cells = [
+            _provider_cell(by_label.get(name), now_local, bar_w, include_rel)
+            for name in _PROVIDER_WINDOWS
+        ]
+        if not quota.windows and quota.note:
+            # Nothing to plot — let the reason take the row instead of two blanks.
+            cells = [Text(quota.note, style="yellow"), Text("")]
+        table.add_row(label, *cells)
+
+    console.print()
+    console.print(Text("  other providers", style="dim"))
+    console.print(table)
+
+
+def _provider_layout(
+    quotas: list[ProviderQuota], width: int, label_w: int, now_local: datetime
+) -> tuple[int, bool]:
+    """Widest bar that still fits, and whether relative durations survive."""
+    clock_w = max(
+        (
+            len(clock_at(now_local, w.reset_secs, show_weekday=True))
+            for q in quotas
+            for w in q.windows
+        ),
+        default=0,
+    )
+    rel_w = max(
+        (len(rel_duration(w.reset_secs)) for q in quotas for w in q.windows),
+        default=0,
+    )
+    # Bordered-table chrome: 4 vertical rules + 3 columns x 2 padding cells.
+    chrome = 4 + 3 * 2
+    for include_rel in (True, False):
+        text_w = _PROVIDER_PCT_W + (2 + clock_w) + ((1 + rel_w) if include_rel else 0)
+        slack = (width - label_w - chrome - 2 * text_w) // 2
+        if slack >= _PROVIDER_BAR_MIN:
+            return min(slack, _PROVIDER_BAR_MAX), include_rel
+    return _PROVIDER_BAR_MIN, False
+
+
+def _provider_label(quota: ProviderQuota) -> Text:
+    label = Text(quota.provider, style="bold")
+    if quota.account and quota.account != quota.provider:
+        label.append(f"\n{quota.account}", style="dim")
+    if quota.note and quota.windows:
+        label.append(f"\n{quota.note}", style="dim italic")
+    return label
+
+
+def _provider_cell(
+    window: ProviderWindow | None, now_local: datetime, bar_w: int, include_rel: bool
+) -> Text:
+    if window is None:
+        return Text("\u2014", style="grey50")
+    cell = gradient_bar(window.used_pct, width=bar_w)
+    cell.append(f"{window.used_pct:>{_PROVIDER_PCT_W - 1}.0f}%")
+    if window.reset_secs:
+        reset = f"  {clock_at(now_local, window.reset_secs, show_weekday=True)}"
+        if include_rel:
+            reset += f" {rel_duration(window.reset_secs)}"
+        cell.append(reset, style="dim")
+    return cell

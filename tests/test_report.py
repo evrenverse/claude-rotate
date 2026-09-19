@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 from claude_rotate.accounts import Account
 from claude_rotate.dashboard import DashboardRow
+from claude_rotate.providers import ProviderQuota, ProviderWindow
 from claude_rotate.report import build_report
 
 # 2026-06-05 00:40 UTC is a Friday — a stable reference for clock/weekday math.
@@ -408,3 +409,43 @@ def test_report_without_scoped_limits_unchanged() -> None:
     report = build_report([row], chosen="matri", active="matri", now=NOW)
     block = next(b for b in _blocks(report) if "matri" in b[0])
     assert not any(ln.lstrip().startswith("fable") for ln in block)
+
+
+class TestProviderSection:
+    """`--report` is what the bundled /account skill relays into a chat."""
+
+    def test_lists_other_providers_after_the_accounts(self) -> None:
+        out = build_report(
+            [],
+            chosen=None,
+            active=None,
+            now=NOW,
+            providers=[
+                ProviderQuota(
+                    provider="codex",
+                    account="team",
+                    windows=(
+                        ProviderWindow(label="5h", used_pct=42.0, reset_secs=_HOUR),
+                        ProviderWindow(label="week", used_pct=13.0, reset_secs=3 * _DAY),
+                    ),
+                )
+            ],
+        )
+
+        assert "codex" in out
+        assert "42%" in out
+        assert "13%" in out
+
+    def test_omits_the_section_entirely_when_no_provider_is_installed(self) -> None:
+        assert "other providers" not in build_report([], chosen=None, active=None, now=NOW)
+
+    def test_keeps_a_broken_provider_visible_with_its_reason(self) -> None:
+        out = build_report(
+            [],
+            chosen=None,
+            active=None,
+            now=NOW,
+            providers=[ProviderQuota(provider="gemini", account="gemini", note="agy timed out")],
+        )
+
+        assert "agy timed out" in out

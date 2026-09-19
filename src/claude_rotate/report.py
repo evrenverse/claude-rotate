@@ -52,6 +52,7 @@ from claude_rotate.insights import (
     status_line,
     warning_messages,
 )
+from claude_rotate.providers import ProviderQuota
 
 
 class _Cell(NamedTuple):
@@ -271,6 +272,7 @@ def build_report(
     active: str | None,
     now: datetime | None = None,
     fenced: bool = True,
+    providers: Sequence[ProviderQuota] = (),
 ) -> str:
     """Build the full account report as a ready-to-display string.
 
@@ -307,4 +309,44 @@ def build_report(
             lines.append("```")
         lines.append("")  # blank line between account blocks (and before warnings)
     lines.extend(_warnings(ordered, active=active, now_utc=now_utc))
+    lines.extend(_provider_block(providers, now=now, fenced=fenced))
     return "\n".join(lines)
+
+
+def _provider_block(
+    providers: Sequence[ProviderQuota], *, now: datetime, fenced: bool
+) -> list[str]:
+    """The other subscriptions, as one compact card; empty when there are none.
+
+    One card rather than one per provider: these rows carry two numbers each,
+    and splitting them would cost more screen than it buys on a phone.
+    """
+    if not providers:
+        return []
+    card: list[str] = []
+    for quota in providers:
+        name = quota.provider
+        if quota.account and quota.account != quota.provider:
+            name = f"{name} · {quota.account}"
+        card.append(name)
+        if not quota.windows:
+            card.append(f"  {quota.note or 'no data'}")
+            continue
+        for window in quota.windows:
+            reset = clock_at(now, window.reset_secs, show_weekday=True) if window.reset_secs else ""
+            rel = rel_duration(window.reset_secs) if window.reset_secs else ""
+            card.append(
+                f"  {window.label:<5}{_bar(window.used_pct)}"
+                f"{window.used_pct:>4.0f}%  {reset} {rel}".rstrip()
+            )
+        if quota.note:
+            card.append(f"  {quota.note}")
+
+    lines = ["other providers", ""]
+    if fenced:
+        lines.append("```")
+    lines.append("\n".join(card))
+    if fenced:
+        lines.append("```")
+    lines.append("")
+    return lines

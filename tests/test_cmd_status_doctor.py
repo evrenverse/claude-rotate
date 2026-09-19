@@ -800,3 +800,128 @@ def test_run_watch_redraws_then_exits_on_keyboard_interrupt(tmp_path, monkeypatc
     out = buf.getvalue()
     assert "refreshing every 5s" in out
     assert "Ctrl-C to quit" in out
+
+
+def _healthy_candidate():
+    from claude_rotate.selection import Candidate
+
+    return Candidate(
+        account=_acc(), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
+    )
+
+
+def test_status_shows_provider_quotas_under_the_dashboard(tmp_path, capsys) -> None:
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+    from claude_rotate.providers import ProviderQuota, ProviderWindow
+
+    quota = ProviderQuota(
+        provider="codex",
+        account="team",
+        windows=(ProviderWindow(label="5h", used_pct=42.0, reset_secs=3600),),
+    )
+    with (
+        patch("claude_rotate.commands.status.probe_many", return_value=[_healthy_candidate()]),
+        patch("claude_rotate.commands.status.collect_providers", return_value=[quota]),
+    ):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=False)
+
+    assert "codex" in capsys.readouterr().err
+
+
+def test_status_exit_code_ignores_a_broken_provider(tmp_path) -> None:
+    """Exit codes describe Anthropic account health — nothing else may move them."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    with (
+        patch("claude_rotate.commands.status.probe_many", return_value=[_healthy_candidate()]),
+        patch(
+            "claude_rotate.commands.status.collect_providers",
+            side_effect=RuntimeError("provider exploded"),
+        ),
+    ):
+        from claude_rotate.commands import status
+
+        rc = status.execute(p, as_json=False)
+
+    assert rc == 0
+
+
+def test_status_json_includes_provider_quotas(tmp_path, capsys) -> None:
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+    from claude_rotate.providers import ProviderQuota, ProviderWindow
+
+    quota = ProviderQuota(
+        provider="gemini",
+        account="Gemini Models",
+        windows=(ProviderWindow(label="week", used_pct=51.0, reset_secs=86400),),
+    )
+    with (
+        patch("claude_rotate.commands.status.probe_many", return_value=[_healthy_candidate()]),
+        patch("claude_rotate.commands.status.collect_providers", return_value=[quota]),
+    ):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=True)
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["providers"][0]["account"] == "Gemini Models"
+
+
+def test_status_report_includes_provider_quotas(tmp_path, capsys) -> None:
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+    from claude_rotate.providers import ProviderQuota, ProviderWindow
+
+    quota = ProviderQuota(
+        provider="codex",
+        account="team",
+        windows=(ProviderWindow(label="5h", used_pct=42.0, reset_secs=3600),),
+    )
+    with (
+        patch("claude_rotate.commands.status.probe_many", return_value=[_healthy_candidate()]),
+        patch("claude_rotate.commands.status.collect_providers", return_value=[quota]),
+    ):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=False, report=True)
+
+    assert "codex" in capsys.readouterr().out
+
+
+def test_status_never_shells_out_to_a_real_provider_tool(tmp_path, monkeypatch) -> None:
+    """The suite must not depend on this machine's codex/agy installs.
+
+    ``status`` collects third-party quota on every run, so without a guard
+    every status test would spawn ``agy`` and wait seconds for it.
+    """
+    import subprocess
+
+    # Recorded, not raised: the provider layer swallows exceptions by design,
+    # so a raising stub would be caught and the test would pass regardless.
+    calls: list[object] = []
+
+    def record(*args, **kwargs):
+        calls.append(args[0] if args else kwargs.get("args"))
+        raise FileNotFoundError  # behave like a tool that is not installed
+
+    monkeypatch.setattr(subprocess, "run", record)
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+
+    with patch("claude_rotate.commands.status.probe_many", return_value=[_healthy_candidate()]):
+        from claude_rotate.commands import status
+
+        assert status.execute(p, as_json=False) == 0
+
+    assert calls == []
