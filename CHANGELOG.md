@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Other providers' quota in `status`.** A second table under the Anthropic
+  dashboard shows the Codex and Gemini subscriptions on this machine, with the
+  same 5h/week windows. Codex is read from the newest
+  `~/.codex/sessions/**/rollout-*.jsonl` (`rate_limits` is logged on every
+  `token_count` event, so it costs nothing and needs no network); Gemini comes
+  from `agy -p /usage`, which resolves the slash command locally and therefore
+  spends no quota. Both appear in `--report` and `--json` as well.
+
+  These readers are display-only. They never enter `selection`, never
+  influence rotation, and a provider that fails or is not installed can never
+  change `status`'s exit code — those codes describe Anthropic account health
+  alone. Results are cached for 60s so `--watch` does not wait on agy's ~7s
+  startup on every frame.
+
+  Gemini deliberately does *not* go through Google Code Assist: a consumer
+  Antigravity account reports `UNSUPPORTED_CLIENT` for `free-tier`, and
+  `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` answers 403
+  `SUBSCRIPTION_REQUIRED`. Antigravity's own `/usage` is the supported route.
+
 ## [0.7.0] - 2026-08-06
 
 ### Added

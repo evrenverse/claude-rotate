@@ -14,7 +14,8 @@ import contextlib
 import json as _json
 import sys
 import time
-from dataclasses import dataclass, replace
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from rich.console import Console
@@ -30,12 +31,15 @@ from claude_rotate.dashboard import (
     forecast_enabled,
     relogin_row,
     render_dashboard,
+    render_providers,
     render_stale_footer,
     row_from_cache,
     status_json,
 )
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import probe_many
+from claude_rotate.providers import ProviderQuota
+from claude_rotate.providers import collect as collect_providers
 from claude_rotate.report import build_report
 from claude_rotate.selection import is_usable, pick_best, selection_pool
 from claude_rotate.sync import read_current_session
@@ -57,6 +61,9 @@ class _Collected:
     relogin_count: int
     has_usable: bool
     accounts_empty: bool = False
+    # Other subscriptions on this machine — display only, never part of
+    # ``exit_code``: these codes describe Anthropic account health.
+    providers: list[ProviderQuota] = field(default_factory=list)
 
     @property
     def exit_code(self) -> int:
@@ -91,7 +98,12 @@ def _collect(paths: Paths) -> _Collected:
             accounts_empty=True,
         )
 
-    candidates = probe_many(list(accounts.values()))
+    # The third-party readers run alongside the probes rather than after them:
+    # agy needs a few seconds, and that should overlap the probes, not follow.
+    with ThreadPoolExecutor(max_workers=1) as providers_pool:
+        provider_future = providers_pool.submit(_providers_or_empty, paths)
+        candidates = probe_many(list(accounts.values()))
+        providers = provider_future.result()
     cache = UsageCache(paths)
 
     rows: list[DashboardRow] = []
@@ -162,7 +174,16 @@ def _collect(paths: Paths) -> _Collected:
         active=active,
         relogin_count=relogin_count,
         has_usable=bool(resolved) and any(is_usable(c) for c in resolved),
+        providers=providers,
     )
+
+
+def _providers_or_empty(paths: Paths) -> list[ProviderQuota]:
+    """Never let a third-party reader break the Anthropic dashboard."""
+    try:
+        return collect_providers(paths)
+    except Exception:
+        return []
 
 
 def _render_dashboard(collected: _Collected, console: Console) -> None:
@@ -175,6 +196,7 @@ def _render_dashboard(collected: _Collected, console: Console) -> None:
         show_forecast=forecast_enabled(),
     )
     render_stale_footer(collected.rows, console=console)
+    render_providers(collected.providers, console=console)
 
 
 def _no_accounts_hint() -> str:
@@ -213,13 +235,22 @@ def execute(
         fenced = not sys.stdout.isatty()
         print(
             build_report(
-                collected.rows, chosen=collected.chosen, active=collected.active, fenced=fenced
+                collected.rows,
+                chosen=collected.chosen,
+                active=collected.active,
+                fenced=fenced,
+                providers=collected.providers,
             )
         )
     elif as_json:
         print(
             _json.dumps(
-                status_json(collected.rows, chosen=collected.chosen, active=collected.active),
+                status_json(
+                    collected.rows,
+                    chosen=collected.chosen,
+                    active=collected.active,
+                    providers=collected.providers,
+                ),
                 indent=2,
             )
         )
@@ -270,13 +301,17 @@ def _run_watch(
                         chosen=collected.chosen,
                         active=collected.active,
                         fenced=False,
+                        providers=collected.providers,
                     )
                 )
             elif as_json:
                 console.print_json(
                     _json.dumps(
                         status_json(
-                            collected.rows, chosen=collected.chosen, active=collected.active
+                            collected.rows,
+                            chosen=collected.chosen,
+                            active=collected.active,
+                            providers=collected.providers,
                         )
                     )
                 )

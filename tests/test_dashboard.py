@@ -17,9 +17,11 @@ from claude_rotate.dashboard import (
     compute_limit_eta,
     gradient_bar,
     render_dashboard,
+    render_providers,
     status_json,
 )
 from claude_rotate.insights import expiry_horizon, seconds_until
+from claude_rotate.providers import ProviderQuota, ProviderWindow
 
 
 def test_gradient_bar_produces_text_instance() -> None:
@@ -1049,3 +1051,150 @@ def test_wide_table_marks_backfilled_scoped_limit_stale() -> None:
     assert "~88%" in fable_line
     week_line = next(ln for ln in out.splitlines() if "61%" in ln)
     assert "~61%" not in week_line
+
+
+class TestRenderProviders:
+    """The extra table under the Anthropic dashboard."""
+
+    def _render(self, quotas: list[ProviderQuota]) -> str:
+        console = Console(force_terminal=False, no_color=True, width=100, file=StringIO())
+        with console.capture() as cap:
+            render_providers(quotas, console=console, now=datetime(2026, 4, 22, 8, 0, tzinfo=UTC))
+        return cap.get()
+
+    def test_shows_provider_account_and_usage(self) -> None:
+        out = self._render(
+            [
+                ProviderQuota(
+                    provider="codex",
+                    account="team",
+                    windows=(ProviderWindow(label="5h", used_pct=42.0, reset_secs=3600),),
+                )
+            ]
+        )
+
+        assert "codex" in out
+        assert "team" in out
+        assert "42%" in out
+
+    def test_renders_nothing_at_all_when_no_provider_is_installed(self) -> None:
+        """No Codex, no agy — the dashboard must not grow an empty frame."""
+        assert self._render([]) == ""
+
+    def test_shows_the_note_of_a_provider_that_has_no_windows(self) -> None:
+        """A reader that is installed but broken stays visible."""
+        out = self._render(
+            [ProviderQuota(provider="gemini", account="gemini", note="agy timed out")]
+        )
+
+        assert "agy timed out" in out
+
+    def test_lists_every_provider_in_one_table(self) -> None:
+        out = self._render(
+            [
+                ProviderQuota(
+                    provider="codex",
+                    account="team",
+                    windows=(ProviderWindow(label="5h", used_pct=1.0, reset_secs=60),),
+                ),
+                ProviderQuota(
+                    provider="gemini",
+                    account="Gemini Models",
+                    windows=(ProviderWindow(label="week", used_pct=51.0, reset_secs=86400),),
+                ),
+            ]
+        )
+
+        assert "codex" in out
+        assert "Gemini Models" in out
+        assert "51%" in out
+
+    def test_places_each_window_under_its_own_column(self) -> None:
+        """A provider reporting only week must not spill into the 5h column."""
+        out = self._render(
+            [
+                ProviderQuota(
+                    provider="gemini",
+                    account="Gemini Models",
+                    windows=(ProviderWindow(label="week", used_pct=51.0, reset_secs=86400),),
+                )
+            ]
+        )
+        header, row = (ln for ln in out.splitlines() if "week" in ln or "51%" in ln)
+
+        assert header.index("week") - 2 <= row.index("51%")
+
+
+class TestProviderJson:
+    def test_status_json_carries_the_providers(self) -> None:
+        payload = status_json(
+            [],
+            chosen=None,
+            providers=[
+                ProviderQuota(
+                    provider="codex",
+                    account="team",
+                    windows=(ProviderWindow(label="5h", used_pct=42.0, reset_secs=3600),),
+                    note="measured 2h 0m ago",
+                )
+            ],
+        )
+
+        assert payload["providers"] == [
+            {
+                "provider": "codex",
+                "account": "team",
+                "note": "measured 2h 0m ago",
+                "windows": [{"label": "5h", "used_pct": 42.0, "reset_secs": 3600}],
+            }
+        ]
+
+    def test_status_json_reports_no_providers_as_an_empty_list(self) -> None:
+        """Consumers can rely on the key existing."""
+        assert status_json([], chosen=None)["providers"] == []
+
+
+class TestProviderTableFitsTheTerminal:
+    """Rich truncates with an ellipsis when a no-wrap column overflows."""
+
+    def _render(self, width: int) -> str:
+        console = Console(force_terminal=False, no_color=True, width=width, file=StringIO())
+        quotas = [
+            ProviderQuota(
+                provider="codex",
+                account="team",
+                windows=(
+                    ProviderWindow(label="5h", used_pct=1.0, reset_secs=3600),
+                    ProviderWindow(label="week", used_pct=10.0, reset_secs=5 * 86400),
+                ),
+                note="measured 13m ago",
+            ),
+            ProviderQuota(
+                provider="gemini",
+                account="Gemini Models",
+                windows=(
+                    ProviderWindow(label="5h", used_pct=67.0, reset_secs=7000),
+                    ProviderWindow(label="week", used_pct=51.0, reset_secs=4 * 86400),
+                ),
+            ),
+        ]
+        with console.capture() as cap:
+            render_providers(quotas, console=console, now=datetime(2026, 4, 22, 8, 0, tzinfo=UTC))
+        return cap.get()
+
+    def test_drops_relative_durations_before_truncating_at_80_columns(self) -> None:
+        out = self._render(80)
+
+        assert "…" not in out
+        assert "13m ago" in out  # the note survives in full
+
+    def test_keeps_relative_durations_when_there_is_room(self) -> None:
+        out = self._render(120)
+
+        assert "…" not in out
+        assert "(1h 0m)" in out
+
+    def test_never_exceeds_the_terminal_width(self) -> None:
+        for width in (80, 100, 120):
+            longest = max(len(line) for line in self._render(width).splitlines())
+            assert longest <= width, f"width {width} overflowed to {longest}"

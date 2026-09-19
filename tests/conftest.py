@@ -34,3 +34,16 @@ def frozen_time(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[float]]:
 
     monkeypatch.setattr("time.time", lambda: now[0])
     yield now
+
+
+@pytest.fixture(autouse=True)
+def no_external_providers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the suite off this machine's real Codex and Antigravity installs.
+
+    ``status`` reads third-party quota on every run, which means shelling out
+    to ``agy`` and scanning ``~/.codex/sessions``. Unguarded, that turns every
+    status test into a seconds-long call whose result depends on whoever runs
+    the suite. Tests that want provider rows patch ``collect_providers`` (or
+    ``_READERS``) themselves.
+    """
+    monkeypatch.setattr("claude_rotate.providers._READERS", ())
