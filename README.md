@@ -15,13 +15,13 @@ Session runs on 'personal' (@); next launch rotates to 'work' (>).
 │             │ 5h                               │ week                                  │    sub │
 ├─────────────┼──────────────────────────────────┼───────────────────────────────────────┼────────┤
 │    alt      │ ██████████  100%  14:25    (25m) │ █████████░    92%  Sun 08:00 (18h 0m) │     4d │
-│    Max-5    │                                  │             →103%  Sun 03:02 (13h 2m) │ 17 Jun │
+│    Max-5    │                                  │             →100%  Sun 03:02 (13h 2m) │ 17 Jun │
 ├─────────────┼──────────────────────────────────┼───────────────────────────────────────┼────────┤
 │ @  personal │ █████░░░░░   51%  15:12 (1h 12m) │ ███████░░░    67%  Tue 04:00 (2d 14h) │     9d │
-│    Max-20   │             →67%                 │             →106%  Mon 18:12  (2d 4h) │ 22 Jun │
+│    Max-20   │                                  │             →100%  Mon 18:12  (2d 4h) │ 22 Jun │
 ├─────────────┼──────────────────────────────────┼───────────────────────────────────────┼────────┤
 │  > work     │ ██░░░░░░░░   19%  16:42 (2h 42m) │ ███░░░░░░░    34%  Thu 23:00  (5d 9h) │    22d │
-│    Max-20   │             →41%                 │             →146%  Tue 17:42  (3d 3h) │ 05 Jul │
+│    Max-20   │                                  │             →100%  Tue 17:42  (3d 3h) │ 05 Jul │
 ╰─────────────┴──────────────────────────────────┴───────────────────────────────────────┴────────╯
 
  ⚠ alt: subscription expires in 4d.
@@ -29,7 +29,7 @@ Session runs on 'personal' (@); next launch rotates to 'work' (>).
 
 The dashboard sorts accounts by subscription expiry (soonest first) and adapts to your terminal — gradient bars grow with the available width, and below ~76 columns the table folds into one compact card per account. First-column markers: `@` the account this session runs on, `>` the next rotation pick, `★` a pinned account, `⊘` a manually disabled one. Accounts that can't be picked right now (a window at the limit, an expired subscription, or a disabled account) render greyed-out so the eye skips them.
 
-Each account spans two lines per window: a **fact line** (usage bar, current %, reset clock + countdown) and a dimmed **forecast sub-line**. The `→XX%` projects where that quota lands at window reset if the current burn rate holds; when a window will cross 100% *before* it resets, the sub-line also shows the clock at which that happens (red under an hour away — see `alt`'s weekly). Forecasts drop once a window is already at/over 100% (see `alt`'s 5h, where you're at the wall). A footer flags accounts that need action — a re-login or a soon-expiring subscription. Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
+Each account renders a **fact line** per window (usage bar, current %, reset clock + countdown). When a window will cross 100% *before* it resets at the current burn rate, a dimmed **ETA sub-line** (`→100%`) shows the clock at which that happens (red under an hour away — see `alt`'s weekly); windows that reset first get no sub-line. Forecasts drop once a window is already at/over 100% (see `alt`'s 5h, where you're at the wall). A footer flags accounts that need action — a re-login or a soon-expiring subscription. Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
 
 Built for developers and AI agents that burn through a single Max plan before lunch and want to keep working against Claude Code without hitting the 5-hour wall.
 
