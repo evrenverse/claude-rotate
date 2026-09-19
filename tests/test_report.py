@@ -449,3 +449,31 @@ class TestProviderSection:
         )
 
         assert "agy timed out" in out
+
+
+class TestProviderForecastInReport:
+    def _render(self, used: float, reset_secs: int) -> str:
+        return build_report(
+            [],
+            chosen=None,
+            active=None,
+            now=NOW,
+            providers=[
+                ProviderQuota(
+                    provider="codex",
+                    account="team",
+                    windows=(ProviderWindow(label="5h", used_pct=used, reset_secs=reset_secs),),
+                )
+            ],
+        )
+
+    def test_projects_usage_to_the_window_reset(self) -> None:
+        """60% burnt through half a 5h window projects to 120% at reset."""
+        assert "→120%" in self._render(60.0, 9000)
+
+    def test_shows_when_the_limit_is_projected_to_be_hit(self) -> None:
+        assert "(1h 40m)" in self._render(60.0, 9000)
+
+    def test_marks_a_window_that_is_already_at_the_limit(self) -> None:
+        """Same wording the account cards use when a window is spent."""
+        assert "reached" in self._render(100.0, 9000)

@@ -26,6 +26,7 @@ from typing import Any, Protocol
 
 from rich import box
 from rich.console import Console
+from rich.measure import Measurement
 from rich.table import Table
 from rich.text import Text
 
@@ -49,7 +50,7 @@ from claude_rotate.insights import (
     status_line,
     warning_messages,
 )
-from claude_rotate.providers import ProviderQuota, ProviderWindow
+from claude_rotate.providers import ProviderQuota
 from claude_rotate.selection import ScopedLimit
 from claude_rotate.sessions import SessionLoad
 
@@ -693,8 +694,12 @@ def _render_table(
     now: datetime,
     now_local: datetime,
     show_forecast: bool,
-) -> bool:
-    """Render the wide table; ``False`` when even the rel-less layout is too wide."""
+) -> int | None:
+    """Render the wide table; ``None`` when even the rel-less layout is too wide.
+
+    The return value is the width actually drawn, so the provider table below
+    can line up with it exactly.
+    """
     cells5 = _window_cells(
         rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
@@ -760,8 +765,8 @@ def _render_table(
                 table.add_row(lbl, t5, t7, sub)
         console.print()
         console.print(table)
-        return True
-    return False
+        return _drawn_width(console, table)
+    return None
 
 
 def _card_text(
@@ -851,7 +856,7 @@ def _render_cards(
     now: datetime,
     now_local: datetime,
     show_forecast: bool,
-) -> None:
+) -> int:
     """Narrow-terminal layout: one bordered, ruled card per account.
 
     Same chrome as the wide table (rounded border + a horizontal rule between
@@ -878,6 +883,12 @@ def _render_cards(
         )
     console.print()
     console.print(table)
+    return _drawn_width(console, table)
+
+
+def _drawn_width(console: Console, table: Table) -> int:
+    """Width a table occupies once printed — Rich's own measurement of it."""
+    return Measurement.get(console, console.options, table).maximum
 
 
 def render_dashboard(
@@ -888,7 +899,8 @@ def render_dashboard(
     active: str | None = None,
     now: datetime | None = None,
     show_forecast: bool = True,
-) -> None:
+) -> int:
+    """Draw the account table; returns the width it drew, for alignment below."""
     now = now or datetime.now(UTC)
     now_local = now.astimezone()
 
@@ -906,10 +918,14 @@ def render_dashboard(
         now_local=now_local,
         show_forecast=show_forecast,
     )
-    if console.width < _CARDS_MAX_WIDTH or not _render_table(rows, **kwargs):
-        _render_cards(rows, **kwargs)
+    width = None
+    if console.width >= _CARDS_MAX_WIDTH:
+        width = _render_table(rows, **kwargs)
+    if width is None:
+        width = _render_cards(rows, **kwargs)
 
     _render_action_footer(rows, console=console, active=active, now_utc=now)
+    return width
 
 
 def _render_action_footer(
@@ -1061,13 +1077,9 @@ def status_json(
     }
 
 
-_PROVIDER_WINDOWS = ("5h", "week")
+_PROVIDER_WINDOWS = (("5h", FORECAST_WINDOW_5H_SECONDS), ("week", FORECAST_WINDOW_7D_SECONDS))
 _PROVIDER_BAR_MAX = 12
 _PROVIDER_BAR_MIN = 6
-# Width of the usage column, shared by the layout maths and the cell that
-# renders it — they drift apart silently otherwise, and Rich pays for it
-# by truncating the reset clock.
-_PROVIDER_PCT_W = 7
 
 
 def render_providers(
@@ -1075,17 +1087,22 @@ def render_providers(
     *,
     console: Console,
     now: datetime | None = None,
+    width: int | None = None,
+    show_forecast: bool = True,
 ) -> None:
     """The other subscriptions on this machine, as a table of their own.
 
-    Deliberately thinner than the Anthropic dashboard above it: bar, usage
-    and reset, nothing else. These providers have no rotation, no forecast
-    history and no subscription expiry to show, and a column for them would
-    stand empty forever.
+    Cells go through the same ``_cells_from_datas``/``_window_text`` pair the
+    account table uses, so a provider row reads identically: fact line with
+    bar, usage and reset, dimmed forecast sub-line beneath it. These providers
+    have no burn-rate history, so the projection falls back to average pace
+    (``rate=None``) — the same fallback scoped windows and ``--report`` use.
 
-    Widths adapt like ``_render_table`` does — relative durations are dropped
-    before the bar shrinks, because a truncated reset clock is worse than no
-    ``(4h 55m)`` at all.
+    ``width`` pins the table to the account table's width; the two are drawn
+    one above the other and a ragged edge between them reads as a defect. At
+    that width the account table may itself have folded into cards, where
+    three columns cannot fit — so this table folds the same way rather than
+    letting Rich truncate the resets.
     """
     if not quotas:
         return
@@ -1093,54 +1110,153 @@ def render_providers(
     now_local = now.astimezone()
 
     labels = [_provider_label(q) for q in quotas]
+    columns = [
+        _cells_from_datas(
+            _provider_datas(quotas, name),
+            window_secs,
+            now_local=now_local,
+            show_forecast=show_forecast,
+        )
+        for name, window_secs in _PROVIDER_WINDOWS
+    ]
+
+    available = width if width is not None else console.width
     label_w = max(max(len(ln) for ln in lbl.plain.split("\n")) for lbl in labels)
-    bar_w, include_rel = _provider_layout(quotas, console.width, label_w, now_local)
-
-    table = Table(box=box.ROUNDED, padding=(0, 1), border_style="dim", header_style="bold")
-    table.add_column("", no_wrap=True)
-    for header in _PROVIDER_WINDOWS:
-        table.add_column(header, no_wrap=True)
-
-    for quota, label in zip(quotas, labels, strict=True):
-        by_label = {w.label: w for w in quota.windows}
-        cells = [
-            _provider_cell(by_label.get(name), now_local, bar_w, include_rel)
-            for name in _PROVIDER_WINDOWS
-        ]
-        if not quota.windows and quota.note:
-            # Nothing to plot — let the reason take the row instead of two blanks.
-            cells = [Text(quota.note, style="yellow"), Text("")]
-        table.add_row(label, *cells)
+    layout = _provider_layout(columns, available, label_w)
 
     console.print()
     console.print(Text("  other providers", style="dim"))
-    console.print(table)
+    if layout is None:
+        console.print(_provider_cards(quotas, labels, columns, available, width))
+    else:
+        console.print(_provider_table(quotas, labels, columns, layout, width))
+
+
+def _provider_table(
+    quotas: list[ProviderQuota],
+    labels: list[Text],
+    columns: list[list[_WindowCell]],
+    layout: tuple[int, bool],
+    width: int | None,
+) -> Table:
+    """Wide layout: one row per provider, one column per window."""
+    bar_w, include_rel = layout
+    table = Table(
+        box=box.ROUNDED,
+        padding=(0, 1),
+        border_style="dim",
+        header_style="bold",
+        width=width,
+    )
+    table.add_column("", no_wrap=True)
+    for name, _ in _PROVIDER_WINDOWS:
+        table.add_column(name, no_wrap=True)
+
+    widths = [_col_widths(column, include_rel=include_rel) for column in columns]
+    for index, (quota, label) in enumerate(zip(quotas, labels, strict=True)):
+        cells = [
+            _window_text(column[index], bar_w=bar_w, pw=pw, cw=cw, rw=rw)
+            for column, (pw, cw, rw) in zip(columns, widths, strict=True)
+        ]
+        if not quota.windows and quota.note:
+            # Nothing to plot — let the reason take the row instead of two N/As.
+            cells = [Text(quota.note, style="yellow"), Text("")]
+        table.add_row(label, *cells)
+    return table
+
+
+def _provider_cards(
+    quotas: list[ProviderQuota],
+    labels: list[Text],
+    columns: list[list[_WindowCell]],
+    available: int,
+    width: int | None,
+) -> Table:
+    """Narrow layout: one card per provider, windows stacked and label-prefixed.
+
+    Mirrors ``_render_cards`` above so a phone-width terminal shows the same
+    shape for both tables.
+    """
+    label_w = max(len(name) for name, _ in _PROVIDER_WINDOWS)
+    # Stacked lines share one grid, so the widths come from every window at
+    # once — sizing each column on its own would stagger the percentages.
+    pw, cw, rw = _col_widths([cell for column in columns for cell in column], include_rel=True)
+    # Card chrome: 2 vertical rules + 1 column x 2 padding cells.
+    text_w = label_w + 1 + 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0)
+    bar_w = max(_PROVIDER_BAR_MIN, min(_PROVIDER_BAR_MAX, available - 4 - text_w))
+
+    table = Table(
+        box=box.ROUNDED,
+        show_lines=True,  # rule between providers — each card reads as its own band
+        show_header=False,
+        padding=(0, 1),
+        border_style="dim",
+        width=width,
+    )
+    table.add_column("", no_wrap=True)
+    for index, (quota, label) in enumerate(zip(quotas, labels, strict=True)):
+        card = Text()
+        card.append_text(label)
+        if not quota.windows and quota.note:
+            card.append("\n")
+            card.append(quota.note, style="yellow")
+            table.add_row(card)
+            continue
+        for (name, _), column in zip(_PROVIDER_WINDOWS, columns, strict=True):
+            cell = column[index]
+            if cell.pct is None:
+                continue
+            card.append("\n")
+            card.append_text(
+                _window_text(
+                    cell,
+                    bar_w=bar_w,
+                    pw=pw,
+                    cw=cw,
+                    rw=rw,
+                    label=f"{name:<{label_w}} ",
+                    label_style="dim",
+                )
+            )
+        table.add_row(card)
+    return table
+
+
+def _provider_datas(quotas: list[ProviderQuota], name: str) -> list[_WindowData]:
+    """One column of window data; a provider missing this window renders N/A.
+
+    ``horizon`` and ``rate`` stay None: these subscriptions have no expiry we
+    know of and no usage history to derive a recent burn rate from.
+    """
+    datas: list[_WindowData] = []
+    for quota in quotas:
+        window = next((w for w in quota.windows if w.label == name), None)
+        if window is None:
+            datas.append((None, 0, False, None, None))
+        else:
+            datas.append((window.used_pct, window.reset_secs, False, None, None))
+    return datas
 
 
 def _provider_layout(
-    quotas: list[ProviderQuota], width: int, label_w: int, now_local: datetime
-) -> tuple[int, bool]:
-    """Widest bar that still fits, and whether relative durations survive."""
-    clock_w = max(
-        (
-            len(clock_at(now_local, w.reset_secs, show_weekday=True))
-            for q in quotas
-            for w in q.windows
-        ),
-        default=0,
-    )
-    rel_w = max(
-        (len(rel_duration(w.reset_secs)) for q in quotas for w in q.windows),
-        default=0,
-    )
+    columns: list[list[_WindowCell]], width: int, label_w: int
+) -> tuple[int, bool] | None:
+    """Widest bar that fits the wide layout, or None when it has to fold.
+
+    Relative durations go before the bar shrinks: a truncated reset clock is
+    worse than a missing ``(4h 55m)``.
+    """
     # Bordered-table chrome: 4 vertical rules + 3 columns x 2 padding cells.
     chrome = 4 + 3 * 2
     for include_rel in (True, False):
-        text_w = _PROVIDER_PCT_W + (2 + clock_w) + ((1 + rel_w) if include_rel else 0)
-        slack = (width - label_w - chrome - 2 * text_w) // 2
+        text_w = 0
+        for column in columns:
+            pw, cw, rw = _col_widths(column, include_rel=include_rel)
+            text_w += 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0)
+        slack = (width - label_w - chrome - text_w) // 2
         if slack >= _PROVIDER_BAR_MIN:
             return min(slack, _PROVIDER_BAR_MAX), include_rel
-    return _PROVIDER_BAR_MIN, False
+    return None
 
 
 def _provider_label(quota: ProviderQuota) -> Text:
@@ -1150,18 +1266,3 @@ def _provider_label(quota: ProviderQuota) -> Text:
     if quota.note and quota.windows:
         label.append(f"\n{quota.note}", style="dim italic")
     return label
-
-
-def _provider_cell(
-    window: ProviderWindow | None, now_local: datetime, bar_w: int, include_rel: bool
-) -> Text:
-    if window is None:
-        return Text("\u2014", style="grey50")
-    cell = gradient_bar(window.used_pct, width=bar_w)
-    cell.append(f"{window.used_pct:>{_PROVIDER_PCT_W - 1}.0f}%")
-    if window.reset_secs:
-        reset = f"  {clock_at(now_local, window.reset_secs, show_weekday=True)}"
-        if include_rel:
-            reset += f" {rel_duration(window.reset_secs)}"
-        cell.append(reset, style="dim")
-    return cell

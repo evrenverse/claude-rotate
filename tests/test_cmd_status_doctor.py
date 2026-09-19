@@ -925,3 +925,27 @@ def test_status_never_shells_out_to_a_real_provider_tool(tmp_path, monkeypatch) 
         assert status.execute(p, as_json=False) == 0
 
     assert calls == []
+
+
+def test_status_aligns_the_provider_table_with_the_account_table(tmp_path, capsys) -> None:
+    """Both tables are drawn one above the other; their edges must line up."""
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"main": _acc()})
+    from claude_rotate.providers import ProviderQuota, ProviderWindow
+
+    quota = ProviderQuota(
+        provider="codex",
+        account="team",
+        windows=(ProviderWindow(label="5h", used_pct=42.0, reset_secs=3600),),
+    )
+    with (
+        patch("claude_rotate.commands.status.probe_many", return_value=[_healthy_candidate()]),
+        patch("claude_rotate.commands.status.collect_providers", return_value=[quota]),
+    ):
+        from claude_rotate.commands import status
+
+        status.execute(p, as_json=False)
+
+    borders = {len(ln) for ln in capsys.readouterr().err.splitlines() if ln.startswith(("╭", "╰"))}
+    assert len(borders) == 1, f"tables drawn at differing widths: {sorted(borders)}"
