@@ -188,15 +188,18 @@ def _providers_or_empty(paths: Paths) -> list[ProviderQuota]:
 
 def _render_dashboard(collected: _Collected, console: Console) -> None:
     """Draw the coloured table + stale-metadata footer for one snapshot."""
-    render_dashboard(
+    show_forecast = forecast_enabled()
+    width = render_dashboard(
         collected.rows,
         chosen=collected.chosen,
         active=collected.active,
         console=console,
-        show_forecast=forecast_enabled(),
+        show_forecast=show_forecast,
     )
     render_stale_footer(collected.rows, console=console)
-    render_providers(collected.providers, console=console)
+    # Pinned to the account table's width — the two are stacked, and the
+    # forecast toggle covers both for the same reason.
+    render_providers(collected.providers, console=console, width=width, show_forecast=show_forecast)
 
 
 def _no_accounts_hint() -> str:

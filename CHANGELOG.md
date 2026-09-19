@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from `agy -p /usage`, which resolves the slash command locally and therefore
   spends no quota. Both appear in `--report` and `--json` as well.
 
+  The table is pinned to the account table's width and folds into the same
+  one-card-per-row layout below `_CARDS_MAX_WIDTH`, so the two never sit at
+  ragged widths. Rows render through the account table's own cell machinery,
+  which gives them the dimmed forecast sub-line and limit ETA for free; with
+  no burn-rate history to draw on, the projection uses average pace — the
+  same fallback scoped windows and `--report` already use.
+
   These readers are display-only. They never enter `selection`, never
   influence rotation, and a provider that fails or is not installed can never
   change `status`'s exit code — those codes describe Anthropic account health

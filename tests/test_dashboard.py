@@ -1198,3 +1198,179 @@ class TestProviderTableFitsTheTerminal:
         for width in (80, 100, 120):
             longest = max(len(line) for line in self._render(width).splitlines())
             assert longest <= width, f"width {width} overflowed to {longest}"
+
+
+def _table_lines(out: str) -> list[str]:
+    """Only the bordered-table rows, so surrounding prose cannot skew a width."""
+    return [ln for ln in out.splitlines() if ln.startswith(("╭", "│", "├", "╰"))]
+
+
+class TestProviderTableMatchesTheDashboardWidth:
+    """The two tables sit on top of each other — ragged edges read as a bug."""
+
+    def _quotas(self) -> list[ProviderQuota]:
+        return [
+            ProviderQuota(
+                provider="codex",
+                account="team",
+                windows=(
+                    ProviderWindow(label="5h", used_pct=1.0, reset_secs=3600),
+                    ProviderWindow(label="week", used_pct=10.0, reset_secs=5 * 86400),
+                ),
+            )
+        ]
+
+    def test_render_dashboard_reports_the_width_it_drew(self) -> None:
+        console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+        with console.capture() as cap:
+            width = render_dashboard([_row(_acc("main"))], chosen="main", console=console)
+
+        assert width == max(len(ln) for ln in _table_lines(cap.get()))
+
+    def test_provider_table_honours_a_requested_width(self) -> None:
+        console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+        with console.capture() as cap:
+            render_providers(self._quotas(), console=console, width=71)
+
+        assert {len(ln) for ln in _table_lines(cap.get())} == {71}
+
+    def test_both_tables_end_up_the_same_width(self) -> None:
+        console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+        with console.capture() as cap:
+            width = render_dashboard([_row(_acc("main"))], chosen="main", console=console)
+            render_providers(self._quotas(), console=console, width=width)
+
+        assert len({len(ln) for ln in _table_lines(cap.get())}) == 1
+
+
+class TestProviderForecast:
+    def _render(self, used: float, reset_secs: int, *, show_forecast: bool = True) -> str:
+        console = Console(file=StringIO(), force_terminal=False, no_color=True, width=120)
+        quotas = [
+            ProviderQuota(
+                provider="codex",
+                account="team",
+                windows=(ProviderWindow(label="5h", used_pct=used, reset_secs=reset_secs),),
+            )
+        ]
+        with console.capture() as cap:
+            render_providers(
+                quotas,
+                console=console,
+                now=datetime(2026, 4, 22, 8, 0, tzinfo=UTC),
+                show_forecast=show_forecast,
+            )
+        return cap.get()
+
+    def test_projects_usage_to_the_window_reset(self) -> None:
+        """60% burnt through half a 5h window projects to 120% at reset."""
+        assert "→120%" in self._render(60.0, 9000)
+
+    def test_shows_when_the_limit_is_projected_to_be_hit(self) -> None:
+        """At that pace 100% falls 1h40m from now — before the window resets."""
+        out = self._render(60.0, 9000)
+
+        assert "(1h 40m)" in out
+
+    def test_omits_the_projection_when_forecasts_are_switched_off(self) -> None:
+        assert "→" not in self._render(60.0, 9000, show_forecast=False)
+
+    def test_projects_nothing_for_an_unused_window(self) -> None:
+        assert "→0%" in self._render(0.0, 9000)
+
+
+class TestProviderTableFoldsWhenNarrow:
+    """At the width the account table folds to cards, three columns cannot fit."""
+
+    def _quotas(self) -> list[ProviderQuota]:
+        return [
+            ProviderQuota(
+                provider="codex",
+                account="team",
+                windows=(
+                    ProviderWindow(label="5h", used_pct=1.0, reset_secs=3600),
+                    ProviderWindow(label="week", used_pct=10.0, reset_secs=5 * 86400),
+                ),
+                note="measured 45m ago",
+            ),
+            ProviderQuota(
+                provider="gemini",
+                account="Gemini Models",
+                windows=(
+                    ProviderWindow(label="5h", used_pct=87.0, reset_secs=7000),
+                    ProviderWindow(label="week", used_pct=52.0, reset_secs=4 * 86400),
+                ),
+            ),
+        ]
+
+    def _render(self, width: int) -> str:
+        console = Console(file=StringIO(), force_terminal=False, no_color=True, width=width)
+        with console.capture() as cap:
+            render_providers(
+                self._quotas(),
+                console=console,
+                width=width,
+                now=datetime(2026, 4, 22, 8, 0, tzinfo=UTC),
+            )
+        return cap.get()
+
+    def test_never_truncates_at_the_account_cards_width(self) -> None:
+        out = self._render(48)
+
+        assert "…" not in out
+
+    def test_still_fills_the_requested_width_when_folded(self) -> None:
+        assert {len(ln) for ln in _table_lines(self._render(48))} == {48}
+
+    def test_keeps_every_provider_and_window_when_folded(self) -> None:
+        out = self._render(48)
+
+        assert "Gemini Models" in out
+        assert "measured 45m ago" in out
+        assert out.count("5h") == 2  # one per provider, not a shared column header
+
+    def test_stays_a_three_column_table_when_there_is_room(self) -> None:
+        """Folding is a fallback, not the new default."""
+        out = self._render(100)
+        header = next(ln for ln in _table_lines(out) if "week" in ln)
+
+        assert header.count("5h") == 1
+        assert out.count("week") == 1  # a column header, not once per provider
+
+
+class TestFoldedProviderCardsShareOneGrid:
+    """Stacked window lines must align, the way the account cards do."""
+
+    def _card_lines(self) -> list[str]:
+        console = Console(file=StringIO(), force_terminal=False, no_color=True, width=48)
+        quotas = [
+            ProviderQuota(
+                provider="codex",
+                account="team",
+                windows=(
+                    # Differing digit counts and one reset on another day: both
+                    # would knock the columns out of line if each window sized
+                    # its own grid.
+                    ProviderWindow(label="5h", used_pct=1.0, reset_secs=3600),
+                    ProviderWindow(label="week", used_pct=10.0, reset_secs=5 * 86400),
+                ),
+            )
+        ]
+        with console.capture() as cap:
+            render_providers(
+                quotas,
+                console=console,
+                width=48,
+                now=datetime(2026, 4, 22, 8, 0, tzinfo=UTC),
+            )
+        return [ln for ln in cap.get().splitlines() if "5h" in ln or "week" in ln]
+
+    def test_percentages_line_up_across_windows(self) -> None:
+        five_hour, week = self._card_lines()
+
+        assert five_hour.index("%") == week.index("%")
+
+    def test_reset_clocks_line_up_across_windows(self) -> None:
+        five_hour, week = self._card_lines()
+
+        assert five_hour.index(":") == week.index(":")

@@ -52,7 +52,7 @@ from claude_rotate.insights import (
     status_line,
     warning_messages,
 )
-from claude_rotate.providers import ProviderQuota
+from claude_rotate.providers import ProviderQuota, ProviderWindow
 
 
 class _Cell(NamedTuple):
@@ -319,7 +319,9 @@ def _provider_block(
     """The other subscriptions, as one compact card; empty when there are none.
 
     One card rather than one per provider: these rows carry two numbers each,
-    and splitting them would cost more screen than it buys on a phone.
+    and splitting them would cost more screen than it buys on a phone. Each
+    window spans two lines like the account cards — fact line, then the
+    average-pace projection (these providers keep no burn-rate history).
     """
     if not providers:
         return []
@@ -333,12 +335,7 @@ def _provider_block(
             card.append(f"  {quota.note or 'no data'}")
             continue
         for window in quota.windows:
-            reset = clock_at(now, window.reset_secs, show_weekday=True) if window.reset_secs else ""
-            rel = rel_duration(window.reset_secs) if window.reset_secs else ""
-            card.append(
-                f"  {window.label:<5}{_bar(window.used_pct)}"
-                f"{window.used_pct:>4.0f}%  {reset} {rel}".rstrip()
-            )
+            card.extend(_provider_window_lines(window, now=now))
         if quota.note:
             card.append(f"  {quota.note}")
 
@@ -350,3 +347,30 @@ def _provider_block(
         lines.append("```")
     lines.append("")
     return lines
+
+
+_PROVIDER_WINDOW_SECONDS = {
+    "5h": FORECAST_WINDOW_5H_SECONDS,
+    "week": FORECAST_WINDOW_7D_SECONDS,
+}
+
+
+def _provider_window_lines(window: ProviderWindow, *, now: datetime) -> list[str]:
+    """Fact line plus projection sub-line for one provider window."""
+    secs = window.reset_secs
+    window_secs = _PROVIDER_WINDOW_SECONDS.get(window.label, secs)
+    reset = f"{clock_at(now, secs, show_weekday=True)} {rel_duration(secs)}" if secs else ""
+    fact = f"  {window.label:<5}{_bar(window.used_pct)}{window.used_pct:>5.0f}%  {reset}".rstrip()
+
+    forecast = compute_forecast(window.used_pct, secs, window_secs)
+    if window.used_pct >= 100:
+        sub = "reached"
+    elif window.used_pct <= 0 or forecast is None:
+        sub = "—"
+    else:
+        eta = compute_limit_eta(window.used_pct, secs, window_secs)
+        sub = f"→{forecast}%"
+        if eta is not None:
+            sub += f"  {clock_at(now, eta, show_weekday=True)} {rel_duration(eta)}"
+    # Indent to the usage column so the projection stacks under the percent.
+    return [fact, f"  {'':<5}{' ' * _BAR_WIDTH}{sub:>5}".rstrip()]
