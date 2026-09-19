@@ -399,13 +399,14 @@ def test_compute_limit_eta_none_pct_returns_none() -> None:
     assert compute_limit_eta(None, 9000, 18000) is None
 
 
-def test_render_shows_forecast_bracket_by_default() -> None:
-    # 50% with 1h (3600s) left in the 5h window: elapsed=14400 → 50*18000//14400 = 62
+def test_render_no_eta_when_window_resets_first() -> None:
+    # 50% with 1h (3600s) left in the 5h window projects to 62% — the wall is
+    # never reached before the reset, so no ETA sub-line.
     rows = [_row(_acc("main"), h5_pct=50.0, h5_secs=3600, w7_pct=20.0, w7_secs=86400)]
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
     render_dashboard(rows, chosen="main", console=console)
     out = console.file.getvalue()
-    assert "→62%" in out
+    assert "→" not in out
 
 
 def test_render_omits_forecast_when_disabled() -> None:
@@ -560,7 +561,7 @@ def test_render_shows_limit_eta_when_wall_before_reset() -> None:
     console = Console(file=StringIO(), force_terminal=False, no_color=True, width=160)
     render_dashboard(rows, chosen="main", console=console, now=fixed_now)
     out = console.file.getvalue()
-    assert "→120%" in out
+    assert "→100%" in out
     assert eta_clock in out
 
 
@@ -882,7 +883,6 @@ def test_window_cells_caps_forecast_and_clock_at_expiry() -> None:
         [row], "week", FORECAST_WINDOW_7D_SECONDS, now_local=now, show_forecast=True
     )[0]
     assert cell.capped is True
-    assert cell.forecast == 93  # projected to the 2d expiry, not the 5.7d reset
     assert cell.eta_clock == ""  # dies before 100% -> no wall ETA
     assert "2d" in cell.rel  # clock/rel show the expiry horizon
 
@@ -895,7 +895,7 @@ def test_window_cells_no_cap_when_expiry_after_reset() -> None:
         [row], "week", FORECAST_WINDOW_7D_SECONDS, now_local=now, show_forecast=True
     )[0]
     assert cell.capped is False
-    assert cell.forecast == 199  # unchanged projection to the real reset
+    assert cell.eta_secs is not None  # projects past 100% before the real reset
 
 
 def test_window_text_marks_capped_clock_with_hourglass() -> None:
@@ -904,8 +904,6 @@ def test_window_text_marks_capped_clock_with_hourglass() -> None:
         pct_str="37%",
         clock="Thu 14:00",
         rel="(2d 0h)",
-        forecast=93,
-        fc_str="→93%",
         eta_secs=None,
         eta_clock="",
         eta_rel="",
@@ -921,8 +919,6 @@ def test_window_text_non_capped_clock_has_no_hourglass() -> None:
         pct_str="37%",
         clock="14:00",
         rel="(2h 0m)",
-        forecast=199,
-        fc_str="→199%",
         eta_secs=None,
         eta_clock="",
         eta_rel="",
@@ -1002,7 +998,7 @@ def _scoped_row(name: str = "main") -> DashboardRow:
         w7_pct=61.0,
         h5_reset_secs=7200,
         w7_reset_secs=4 * 86400,
-        w7_scoped=(ScopedLimit(label="fable", pct=35.0, reset_secs=3 * 86400),),
+        w7_scoped=(ScopedLimit(label="fable", pct=65.0, reset_secs=3 * 86400),),
     )
 
 
@@ -1013,11 +1009,12 @@ def test_wide_table_renders_scoped_limit_as_full_window_line() -> None:
     fable_line = next(ln for ln in out.splitlines() if "fable" in ln)
     # Full fact line like week: bar glyphs, current %, and a reset clock.
     assert "█" in fable_line and "░" in fable_line
-    assert "35%" in fable_line
+    assert "65%" in fable_line
     assert ":" in fable_line  # reset clock
-    # Forecast sub-line beneath (average-pace projection, rate=None).
+    # ETA sub-line beneath (average-pace projection, rate=None): 65% after 4d
+    # of 7d projects past 100% before the reset.
     following = out.splitlines()[out.splitlines().index(fable_line) + 1]
-    assert "→" in following
+    assert "→100%" in following
 
 
 def test_cards_render_scoped_limit_as_full_window_line() -> None:
@@ -1026,7 +1023,7 @@ def test_cards_render_scoped_limit_as_full_window_line() -> None:
     out = console.file.getvalue()
     fable_line = next(ln for ln in out.splitlines() if "fable" in ln)
     assert "█" in fable_line and "░" in fable_line
-    assert "35%" in fable_line
+    assert "65%" in fable_line
     assert ":" in fable_line
 
 
@@ -1262,9 +1259,9 @@ class TestProviderForecast:
             )
         return cap.get()
 
-    def test_projects_usage_to_the_window_reset(self) -> None:
-        """60% burnt through half a 5h window projects to 120% at reset."""
-        assert "→120%" in self._render(60.0, 9000)
+    def test_marks_the_wall_when_usage_projects_past_100(self) -> None:
+        """60% burnt through half a 5h window hits 100% before the reset."""
+        assert "→100%" in self._render(60.0, 9000)
 
     def test_shows_when_the_limit_is_projected_to_be_hit(self) -> None:
         """At that pace 100% falls 1h40m from now — before the window resets."""
@@ -1276,7 +1273,7 @@ class TestProviderForecast:
         assert "→" not in self._render(60.0, 9000, show_forecast=False)
 
     def test_projects_nothing_for_an_unused_window(self) -> None:
-        assert "→0%" in self._render(0.0, 9000)
+        assert "→" not in self._render(0.0, 9000)
 
 
 class TestProviderTableFoldsWhenNarrow:

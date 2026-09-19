@@ -10,9 +10,9 @@ window at/over the limit or an expired subscription — render flattened to
 uniform grey (``is_unusable`` + ``_greyed``) so the eye skips them. Each window
 (5h / week, plus any model-scoped weekly window such as Fable's own cap,
 rendered as a dim-labelled line beneath week) renders a *fact line* (bar,
-usage %, reset clock + relative duration) and a dimmed *forecast sub-line*
-(projected % at reset and, when
-the limit is crossed before reset, the clock at which usage hits 100%).
+usage %, reset clock + relative duration) and, when the limit is crossed
+before reset, a dimmed *ETA sub-line* (``→100%`` plus the clock at which usage
+hits the wall).
 Shared quota semantics (forecasts, warnings, wording) live in
 ``claude_rotate.insights`` and are reused by the ``--report`` renderer.
 """
@@ -323,7 +323,7 @@ def _pct_color(pct: float | None, width: int = 12) -> str:
 
 
 def forecast_enabled() -> bool:
-    """Whether the status dashboard renders the →XX% forecast sub-lines.
+    """Whether the status dashboard renders the →100% ETA sub-lines.
 
     On by default; ``CLAUDE_ROTATE_FORECAST=0`` disables it. Mirrors the toggle
     in the separate (external) Bash statusline project so the two UIs agree.
@@ -352,6 +352,7 @@ _BAR_MAX = 20
 _CARDS_MAX_WIDTH = 76  # below this terminal width, fold the table into cards
 _CARD_BAR_WIDTH = 10
 _ETA_URGENT_SECS = 3600  # limit-ETA under an hour renders red, not dim
+_ETA_MARK = "→100%"  # sub-line marker: "hits 100% at <clock>"
 
 _STATUS_LABELS = {
     "relogin": ("RELOGIN", "red"),
@@ -401,15 +402,13 @@ class _WindowCell:
     pct_str: str
     clock: str
     rel: str
-    forecast: int | None
-    fc_str: str
     eta_secs: int | None
     eta_clock: str
     eta_rel: str
     capped: bool = False
 
 
-_NA_CELL = _WindowCell(None, "N/A", "", "", None, "", None, "", "")
+_NA_CELL = _WindowCell(None, "N/A", "", "", None, "", "")
 
 
 _WindowData = tuple[float | None, int, bool, int | None, float | None]
@@ -462,9 +461,6 @@ def _cells_from_datas(
             continue
         capped = horizon_arg is not None
         horizon = horizon_arg if horizon_arg is not None else secs
-        forecast = (
-            compute_forecast(pct, secs, window_secs, horizon_arg, rate) if show_forecast else None
-        )
         eta = (
             compute_limit_eta(pct, secs, window_secs, horizon_arg, rate) if show_forecast else None
         )
@@ -475,8 +471,6 @@ def _cells_from_datas(
                 pct_str=f"{prefix}{pct:g}%",
                 clock=clock_at(now_local, horizon, show_weekday=show_weekday),
                 rel=rel_duration(horizon),
-                forecast=forecast,
-                fc_str=f"→{forecast}%" if forecast is not None else "",
                 eta_secs=eta,
                 eta_clock=(
                     clock_at(now_local, eta, show_weekday=show_weekday) if eta is not None else ""
@@ -541,7 +535,7 @@ def _week_and_scoped_cells(
 
 def _col_widths(cells: list[_WindowCell], *, include_rel: bool) -> tuple[int, int, int]:
     """(pct, clock, rel) column widths shared by fact line and sub-line."""
-    pw = max((len(s) for c in cells for s in (c.pct_str, c.fc_str) if s), default=3)
+    pw = max((len(s) for c in cells for s in (c.pct_str, _ETA_MARK) if s), default=3)
     cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
     rw = 0
     if include_rel:
@@ -578,19 +572,17 @@ def _window_text(
         if c.capped:
             # The clock shows the subscription expiry, not the window reset.
             t.append(" ⌛", style="dim")
-    if not (c.fc_str or c.eta_clock):
+    if not (cw and c.eta_clock):
         return t
+    eta_style = "red" if c.eta_secs is not None and c.eta_secs < _ETA_URGENT_SECS else "dim"
     t.append("\n")
     t.append(" " * (len(label) + bar_w + 2))
-    fc_style = _pct_color(float(c.forecast), width=bar_w) if c.forecast else "grey50"
-    t.append(f"{c.fc_str:>{pw}}", style=fc_style)
-    if cw and c.eta_clock:
-        eta_style = "red" if c.eta_secs is not None and c.eta_secs < _ETA_URGENT_SECS else "dim"
-        t.append("  ")
-        t.append(f"{c.eta_clock:>{cw}}", style=eta_style)
-        if rw and c.eta_rel:
-            t.append(" ")
-            t.append(f"{c.eta_rel:>{rw}}", style=eta_style)
+    t.append(f"{_ETA_MARK:>{pw}}", style=eta_style)
+    t.append("  ")
+    t.append(f"{c.eta_clock:>{cw}}", style=eta_style)
+    if rw and c.eta_rel:
+        t.append(" ")
+        t.append(f"{c.eta_rel:>{rw}}", style=eta_style)
     return t
 
 
@@ -828,7 +820,7 @@ def _card_text(
     if c7.pct is not None:
         windows += [(lbl, sc) for lbl, sc in scoped if sc.pct is not None]
     cells = [c for _, c in windows]
-    pw = max((len(s) for c in cells for s in (c.pct_str, c.fc_str) if s), default=3)
+    pw = max((len(s) for c in cells for s in (c.pct_str, _ETA_MARK) if s), default=3)
     cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
     rw = max((len(s) for c in cells for s in (c.rel, c.eta_rel) if s), default=0)
     label_w = max(len(lbl) for lbl, _ in windows) + 2
