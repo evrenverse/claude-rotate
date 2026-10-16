@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the limits of a session's last turn and drifted far from `/status`); Gemini
   comes from `agy -p /usage`, which resolves the slash command locally and
   therefore spends no quota. Both appear in `--report` and `--json` as well.
+  A logged-out `agy` leaves no row at all: it is cut off at its login prompt
+  instead of blocking on the OAuth callback until the read times out.
 
   The table is pinned to the account table's width and folds into the same
   one-card-per-row layout below `_CARDS_MAX_WIDTH`, so the two never sit at

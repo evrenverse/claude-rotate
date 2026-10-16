@@ -15,7 +15,7 @@ import pytest
 from claude_rotate import providers
 from claude_rotate.config import Paths, ensure_dirs
 from claude_rotate.config import paths as config_paths
-from claude_rotate.providers import ProviderQuota, ProviderWindow, codex
+from claude_rotate.providers import ProviderQuota, ProviderWindow, codex, gemini
 from claude_rotate.providers.codex import parse_rate_limits
 from claude_rotate.providers.gemini import parse_usage
 
@@ -82,6 +82,23 @@ for line in sys.stdin:
     if msg.get("method") == "account/rateLimits/read":
         print(json.dumps({"id": msg["id"], "result": %s}), flush=True)
 """
+
+
+class TestGeminiFetch:
+    def test_a_logged_out_agy_yields_no_row_and_no_wait(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Logged out, agy blocks on an OAuth prompt; that is no subscription, not an error."""
+        agy = tmp_path / "agy"
+        agy.write_text(
+            "#!/bin/sh\necho 'Authentication required. Please visit the URL to log in:' >&2\n"
+            "exec sleep 30\n"
+        )
+        agy.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
+        monkeypatch.setattr(gemini, "TIMEOUT_SECONDS", 3)
+
+        assert gemini.fetch(NOW) == []
 
 
 class TestCodexParser:

@@ -16,6 +16,7 @@ is *remaining*, which this module inverts into consumed percent:
 from __future__ import annotations
 
 import subprocess
+import threading
 from datetime import datetime
 
 from claude_rotate.providers import ProviderQuota, ProviderWindow
@@ -67,24 +68,38 @@ def parse_usage(text: str, *, now: float) -> list[ProviderQuota]:
 
 
 def fetch(now: float) -> list[ProviderQuota]:
-    """Run ``agy -p /usage``; empty list when Antigravity is not installed."""
+    """Run ``agy -p /usage``; empty list when Antigravity is not installed or logged out."""
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             ["agy", "-p", "/usage", "--print-timeout", f"{TIMEOUT_SECONDS - 5}s"],
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
-            timeout=TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         return []
-    except subprocess.TimeoutExpired:
-        return [ProviderQuota(provider="gemini", account="gemini", note="agy timed out")]
 
-    quotas = parse_usage(result.stdout, now=now)
+    timer = threading.Timer(TIMEOUT_SECONDS, proc.kill)
+    timer.start()
+    output = ""
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            # Logged out, agy prints a login URL and then waits a minute for the
+            # OAuth callback: no subscription to show, so stop it right there.
+            if line.startswith("Authentication required"):
+                return []
+            output += line
+    finally:
+        timed_out = not timer.is_alive()
+        timer.cancel()
+        proc.kill()
+        proc.wait()
+
+    quotas = parse_usage(output, now=now)
     if quotas:
         return quotas
-    # Installed but unreadable — a logged-out agy, or an output format that
-    # moved on. Surface it rather than hiding the provider entirely.
-    return [
-        ProviderQuota(provider="gemini", account="gemini", note="no usage data (agy logged in?)")
-    ]
+    # Installed and logged in but unreadable: a hung agy, or an output format
+    # that moved on. Surface it rather than hiding the provider entirely.
+    note = "agy timed out" if timed_out else "no usage data"
+    return [ProviderQuota(provider="gemini", account="gemini", note=note)]
