@@ -1,4 +1,4 @@
-"""Third-party provider quota readers (Codex rollouts, Antigravity `/usage`).
+"""Third-party provider quota readers (Codex app server, Antigravity `/usage`).
 
 These providers are display-only: they feed the extra table under the
 Anthropic dashboard and must never influence rotation or the exit code.
@@ -6,7 +6,7 @@ Anthropic dashboard and must never influence rotation or the exit code.
 
 from __future__ import annotations
 
-import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -15,8 +15,8 @@ import pytest
 from claude_rotate import providers
 from claude_rotate.config import Paths, ensure_dirs
 from claude_rotate.config import paths as config_paths
-from claude_rotate.providers import ProviderQuota, ProviderWindow
-from claude_rotate.providers.codex import parse_rollout
+from claude_rotate.providers import ProviderQuota, ProviderWindow, codex
+from claude_rotate.providers.codex import parse_rate_limits
 from claude_rotate.providers.gemini import parse_usage
 
 NOW = datetime(2026, 4, 22, 8, 0, tzinfo=UTC).timestamp()
@@ -28,31 +28,6 @@ AGY_USAGE = (
     "Claude and GPT models\tWeekly Limit Remaining\t100%\t2026-04-27T09:59:59Z\n"
     "Claude and GPT models\tFive Hour Limit Remaining\t100%\t2026-04-22T14:59:59Z\n"
 )
-
-
-def _rollout_line(ts: str, *, primary: float, secondary: float, resets_at: int) -> str:
-    return json.dumps(
-        {
-            "timestamp": ts,
-            "type": "event_msg",
-            "payload": {
-                "type": "token_count",
-                "rate_limits": {
-                    "primary": {
-                        "used_percent": primary,
-                        "window_minutes": 300,
-                        "resets_at": resets_at,
-                    },
-                    "secondary": {
-                        "used_percent": secondary,
-                        "window_minutes": 10080,
-                        "resets_at": resets_at + 600_000,
-                    },
-                    "plan_type": "team",
-                },
-            },
-        }
-    )
 
 
 class TestGeminiParser:
@@ -89,73 +64,80 @@ class TestGeminiParser:
         assert len(parse_usage(noisy, now=NOW)) == 2
 
 
+# Real `account/rateLimits/read` result, trimmed to the fields the reader uses.
+CODEX_RESULT = {
+    "rateLimits": {
+        "limitId": "codex",
+        "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": int(NOW) + 7200},
+        "secondary": {"usedPercent": 17, "windowDurationMins": 10080, "resetsAt": int(NOW) + 86400},
+        "planType": "team",
+        "rateLimitReachedType": "workspace_member_usage_limit_reached",
+    },
+}
+
+FAKE_CODEX = """#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    msg = json.loads(line)
+    if msg.get("method") == "account/rateLimits/read":
+        print(json.dumps({"id": msg["id"], "result": %s}), flush=True)
+"""
+
+
 class TestCodexParser:
-    def test_reads_the_last_rate_limit_event_in_the_session(self) -> None:
-        """A session logs rate limits per turn; only the newest one is current."""
-        lines = [
-            _rollout_line("2026-04-22T07:00:00Z", primary=1.0, secondary=10.0, resets_at=int(NOW)),
-            _rollout_line(
-                "2026-04-22T07:30:00Z", primary=42.0, secondary=13.0, resets_at=int(NOW) + 7200
-            ),
-        ]
+    def test_reads_both_windows_as_consumed_percent(self) -> None:
+        quota = parse_rate_limits(CODEX_RESULT, now=NOW)
 
-        quota = parse_rollout(lines, now=NOW)
-
-        assert quota is not None
-        assert [w.used_pct for w in quota.windows] == [42.0, 13.0]
-
-    def test_labels_the_row_with_the_plan_type(self) -> None:
-        quota = parse_rollout(
-            [_rollout_line("2026-04-22T07:30:00Z", primary=1.0, secondary=1.0, resets_at=int(NOW))],
-            now=NOW,
-        )
-
-        assert quota is not None
         assert quota.provider == "codex"
         assert quota.account == "team"
+        assert [(w.label, w.used_pct) for w in quota.windows] == [("5h", 100.0), ("week", 17.0)]
+        assert quota.windows[0].reset_secs == 7200
 
-    def test_treats_an_elapsed_window_as_reset_to_zero(self) -> None:
-        """Rollouts are historical: a window whose reset has passed is empty now."""
-        stale = _rollout_line(
-            "2026-04-21T07:30:00Z", primary=88.0, secondary=20.0, resets_at=int(NOW) - 3600
-        )
+    def test_labels_windows_by_duration_not_position(self) -> None:
+        """A plan with only a weekly window reports it as `primary`."""
+        result = {"rateLimits": {"primary": {"usedPercent": 3, "windowDurationMins": 10080}}}
 
-        quota = parse_rollout([stale], now=NOW)
+        assert [w.label for w in parse_rate_limits(result, now=NOW).windows] == ["week"]
 
-        assert quota is not None
-        five_hour = next(w for w in quota.windows if w.label == "5h")
-        assert five_hour.used_pct == 0.0
-        assert five_hour.reset_secs == 0
+    def test_null_windows_leave_the_row_empty(self) -> None:
+        result = {"rateLimits": {"limitId": "premium", "primary": None, "secondary": None}}
 
-    def test_marks_measurements_older_than_a_few_minutes_as_stale(self) -> None:
-        """Codex numbers are only as fresh as the last codex session."""
-        lines = [
-            _rollout_line(
-                "2026-04-22T06:00:00Z", primary=42.0, secondary=13.0, resets_at=int(NOW) + 7200
-            )
-        ]
+        assert parse_rate_limits(result, now=NOW).windows == ()
 
-        quota = parse_rollout(lines, now=NOW)
 
-        assert quota is not None
-        assert quota.note == "measured 2h 0m ago"
+class TestCodexFetch:
+    def _install(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, script: str) -> None:
+        codex = tmp_path / "codex"
+        codex.write_text(script)
+        codex.chmod(0o755)
+        monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ['PATH']}")
 
-    def test_stays_silent_when_the_session_logged_no_rate_limits(self) -> None:
-        assert (
-            parse_rollout(['{"type":"event_msg","payload":{"type":"agent_message"}}'], now=NOW)
-            is None
-        )
+    def test_asks_the_app_server_and_keeps_stdin_open_for_the_reply(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._install(tmp_path, monkeypatch, FAKE_CODEX % repr(CODEX_RESULT))
 
-    def test_survives_a_truncated_final_line(self) -> None:
-        """Rollouts of a running session end mid-write."""
-        good = _rollout_line(
-            "2026-04-22T07:55:00Z", primary=5.0, secondary=5.0, resets_at=int(NOW) + 60
-        )
+        (quota,) = codex.fetch(NOW)
 
-        quota = parse_rollout([good, '{"timestamp": "2026-04-22T07:5'], now=NOW)
+        assert [w.used_pct for w in quota.windows] == [100.0, 17.0]
 
-        assert quota is not None
-        assert quota.windows[0].used_pct == 5.0
+    def test_a_silent_server_is_cut_off_and_reported(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._install(tmp_path, monkeypatch, "#!/bin/sh\nsleep 30\n")
+        monkeypatch.setattr(codex, "TIMEOUT_SECONDS", 0.5)
+
+        (quota,) = codex.fetch(NOW)
+
+        assert quota.windows == ()
+        assert "codex" in quota.note
+
+    def test_returns_nothing_when_codex_is_not_installed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("PATH", str(tmp_path))
+
+        assert codex.fetch(NOW) == []
 
 
 class TestProviderQuota:

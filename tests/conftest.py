@@ -41,7 +41,7 @@ def no_external_providers(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the suite off this machine's real Codex and Antigravity installs.
 
     ``status`` reads third-party quota on every run, which means shelling out
-    to ``agy`` and scanning ``~/.codex/sessions``. Unguarded, that turns every
+    to ``agy`` and ``codex app-server``. Unguarded, that turns every
     status test into a seconds-long call whose result depends on whoever runs
     the suite. Tests that want provider rows patch ``collect_providers`` (or
     ``_READERS``) themselves.
