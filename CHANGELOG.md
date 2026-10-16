@@ -11,11 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Other providers' quota in `status`.** A second table under the Anthropic
   dashboard shows the Codex and Gemini subscriptions on this machine, with the
-  same 5h/week windows. Codex is read from the newest
-  `~/.codex/sessions/**/rollout-*.jsonl` (`rate_limits` is logged on every
-  `token_count` event, so it costs nothing and needs no network); Gemini comes
-  from `agy -p /usage`, which resolves the slash command locally and therefore
-  spends no quota. Both appear in `--report` and `--json` as well.
+  same 5h/week windows. Codex is asked live through `codex app-server`'s
+  `account/rateLimits/read` — the call behind the TUI's `/status`, so the
+  numbers match it and no model tokens are spent (session rollouts only hold
+  the limits of a session's last turn and drifted far from `/status`); Gemini
+  comes from `agy -p /usage`, which resolves the slash command locally and
+  therefore spends no quota. Both appear in `--report` and `--json` as well.
 
   The table is pinned to the account table's width and folds into the same
   one-card-per-row layout below `_CARDS_MAX_WIDTH`, so the two never sit at

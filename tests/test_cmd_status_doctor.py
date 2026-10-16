@@ -914,6 +914,7 @@ def test_status_never_shells_out_to_a_real_provider_tool(tmp_path, monkeypatch) 
         raise FileNotFoundError  # behave like a tool that is not installed
 
     monkeypatch.setattr(subprocess, "run", record)
+    monkeypatch.setattr(subprocess, "Popen", record)
 
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)
