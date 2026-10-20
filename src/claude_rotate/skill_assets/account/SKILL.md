@@ -13,10 +13,11 @@ of every configured account, via `claude-rotate`.
 ## How to run
 
 Run the command and show its output to the user **verbatim** — it is already
-formatted (a status line, one fenced block per account, and — only when action
-is needed — a short warnings list). Keep every code fence intact so each account
-stays its own card. Do not reformat, merge the blocks, summarize, or add
-commentary.
+formatted (a status line, one fenced block per account, a short warnings list
+only when action is needed, and one card for the other coding subscriptions on
+the machine when Codex or Gemini is installed). Keep every code fence intact so
+each account stays its own card. Do not reformat, merge the blocks, summarize,
+or add commentary.
 
 ```bash
 claude-rotate status --report
@@ -48,6 +49,9 @@ as-is. Never fabricate numbers.
 - **Warnings** (only when action is needed; absent otherwise): an account needs
   re-login, or a subscription expires within 7 days. Quota-usage risk and the
   fallback recommendation are intentionally not shown.
+- **Other providers** (only when Codex or Gemini is installed): one fenced card
+  under the heading `other providers`, with the same fact line and projection
+  sub-line per window. Display-only — these quotas never affect rotation.
 
 ## Maintenance
 

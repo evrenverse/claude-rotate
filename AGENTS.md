@@ -2,7 +2,7 @@
 
 If you already use an AI coding agent (Claude Code, Cursor, Aider, Codex, Continue, etc.) you can hand it this file — or just the prompt block below — and it will set up `claude-rotate` end-to-end without you having to copy commands.
 
-**If you are the agent reading this:** follow the steps in order, stop at every "PAUSE" marker and let the human act before you continue. Never fabricate token values, never skip the verification step.
+**If you were handed this file to set up claude-rotate:** follow the steps in order. Step 6 needs the human in the browser for every OAuth login — wait until they are done before you continue. Never fabricate token values, never skip the verification step.
 
 ---
 
