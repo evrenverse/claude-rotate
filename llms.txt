@@ -6,16 +6,16 @@ claude-rotate lets developers and AI agents run several Claude Code subscription
 
 ## Key docs
 
-- [README.md](https://github.com/codename-cn/claude-rotate/blob/main/README.md): Install, quickstart, command reference, platform support, known quirks.
-- [AGENTS.md](https://github.com/codename-cn/claude-rotate/blob/main/AGENTS.md): End-to-end setup instructions meant to be handed directly to a coding agent (Claude Code, Cursor, Aider, Codex, …). Includes token-handling guardrails and a verification checklist.
-- [SECURITY.md](https://github.com/codename-cn/claude-rotate/blob/main/SECURITY.md): Threat model, token-redaction rules, reporting channel.
-- [CHANGELOG.md](https://github.com/codename-cn/claude-rotate/blob/main/CHANGELOG.md): Release notes.
+- [README.md](https://github.com/evrenverse/claude-rotate/blob/main/README.md): Install, quickstart, command reference, platform support, known quirks.
+- [AGENTS.md](https://github.com/evrenverse/claude-rotate/blob/main/AGENTS.md): End-to-end setup instructions meant to be handed directly to a coding agent (Claude Code, Cursor, Aider, Codex, …). Includes token-handling guardrails and a verification checklist.
+- [SECURITY.md](https://github.com/evrenverse/claude-rotate/blob/main/SECURITY.md): Threat model, token-redaction rules, reporting channel.
+- [CHANGELOG.md](https://github.com/evrenverse/claude-rotate/blob/main/CHANGELOG.md): Release notes.
 
 ## Install
 
 ```
-uv tool install git+https://github.com/codename-cn/claude-rotate
-# or: pipx install git+https://github.com/codename-cn/claude-rotate
+uv tool install git+https://github.com/evrenverse/claude-rotate
+# or: pipx install git+https://github.com/evrenverse/claude-rotate
 ```
 
 Not on PyPI yet — install from GitHub. Requires Python ≥ 3.11 and the real `claude` binary (2.1.117+) already on `PATH`.
