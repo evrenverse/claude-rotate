@@ -134,3 +134,19 @@ def test_remove_when_absent_is_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("HOME", str(tmp_path))
     _fake_agents(tmp_path, "claude")
     assert remove() == []
+
+
+def test_install_keeps_canonical_when_agent_skills_dir_is_the_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # ~/.claude/skills -> ~/.agents/skills: linking into it would replace the
+    # canonical directory with a symlink to itself.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".agents" / "skills").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills").symlink_to(tmp_path / ".agents" / "skills")
+
+    canonical, _linked = install()
+
+    assert not canonical.is_symlink()
+    assert (canonical / "SKILL.md").read_text(encoding="utf-8") == bundled_file("SKILL.md")

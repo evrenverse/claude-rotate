@@ -58,6 +58,10 @@ def _link_into(skills_dir: Path, canonical: Path) -> Path:
     """Create (or refresh) a relative symlink ``skills_dir/<name>`` → canonical."""
     skills_dir.mkdir(parents=True, exist_ok=True)
     link = skills_dir / SKILL_NAME
+    # A skills dir that is the store itself (~/.claude/skills -> ~/.agents/skills)
+    # already holds the skill; relinking would replace it with a link to itself.
+    if skills_dir.resolve() == canonical.parent.resolve():
+        return link
     if link.is_symlink() or link.exists():
         if link.is_dir() and not link.is_symlink():
             shutil.rmtree(link)
