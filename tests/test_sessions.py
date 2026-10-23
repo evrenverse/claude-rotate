@@ -103,6 +103,8 @@ def test_read_records_ignores_corrupt_files(tmp_path) -> None:
     p = _paths(tmp_path)
     p.sessions_dir.mkdir(parents=True)
     (p.sessions_dir / "bad.json").write_text("{not json")
+    for name, body in (("list", "[]"), ("null", "null"), ("str", '"x"'), ("int", "5")):
+        (p.sessions_dir / f"{name}.json").write_text(body)  # valid JSON, not an object
     sessions.write_record(p, SessionRecord("u1", "matri", 1, 1.0, 2.0, 2.0))
     assert [r.uuid for r in sessions.read_records(p)] == ["u1"]
 

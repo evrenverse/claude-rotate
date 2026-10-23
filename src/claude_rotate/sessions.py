@@ -44,7 +44,6 @@ class SessionRecord:
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> SessionRecord:
-        claude_session_id = raw.get("claude_session_id")  # absent in records from older versions
         return cls(
             uuid=str(raw["uuid"]),
             account=str(raw["account"]),
@@ -52,7 +51,9 @@ class SessionRecord:
             start_time=float(raw["start_time"]),  # type: ignore[arg-type]
             started_at=float(raw["started_at"]),  # type: ignore[arg-type]
             last_active=float(raw["last_active"]),  # type: ignore[arg-type]
-            claude_session_id=claude_session_id if isinstance(claude_session_id, str) else None,
+            # Absent in records from older versions. Keep this after the indexed reads above:
+            # non-object JSON must fail there with TypeError (which callers catch), not on .get.
+            claude_session_id=sid if isinstance(sid := raw.get("claude_session_id"), str) else None,
         )
 
 
