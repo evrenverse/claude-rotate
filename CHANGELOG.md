@@ -52,8 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Session files left by an older format are removed.** A file in the
   sessions directory that no longer parses as a session record was skipped
-  forever. `count_load` and `reap` now delete such files once they are over a
-  day old, so a half-written file is never touched.
+  forever. Every `claude-rotate run` and `status` now deletes such files once
+  they are a day old; younger files are never touched.
 
 ## [0.7.0] - 2026-08-06
 
