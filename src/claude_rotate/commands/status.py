@@ -165,7 +165,15 @@ def _collect(paths: Paths) -> _Collected:
     loads = sessions.count_load(
         paths, now=time.time(), active_window=float(SESSION_ACTIVE_WINDOW_SECONDS)
     )
-    rows = [replace(r, session_load=loads.get(r.account.name)) for r in rows]
+    claude_ids = sessions.claude_sessions_by_account(paths)
+    rows = [
+        replace(
+            r,
+            session_load=loads.get(r.account.name),
+            claude_sessions=tuple(claude_ids.get(r.account.name, [])),
+        )
+        for r in rows
+    ]
     rows = attach_forecast_rates(rows, cache, time.time())
 
     return _Collected(

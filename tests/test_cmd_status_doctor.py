@@ -113,7 +113,7 @@ def test_status_json_reports_live_sessions(tmp_path, capsys) -> None:
 
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)
-    Store(p).save({"matri": _acc("matri")})
+    Store(p).save({"matri": _acc("matri"), "ply": _acc("ply")})
 
     # Write a LIVE session record for "matri" backed by this process, so
     # count_load counts it instead of reaping it. last_active=now keeps it
@@ -129,15 +129,23 @@ def test_status_json_reports_live_sessions(tmp_path, capsys) -> None:
             start_time=sessions.process_start_time(pid) or 0.0,
             started_at=now,
             last_active=now,
+            claude_session_id="s-1",
         ),
     )
 
     from claude_rotate.selection import Candidate
 
-    cand = Candidate(
-        account=_acc("matri"), h5_pct=10.0, w7_pct=20.0, h5_reset_secs=3600, w7_reset_secs=86400
-    )
-    with patch("claude_rotate.commands.status.probe_many", return_value=[cand]):
+    cands = [
+        Candidate(
+            account=_acc(name),
+            h5_pct=10.0,
+            w7_pct=20.0,
+            h5_reset_secs=3600,
+            w7_reset_secs=86400,
+        )
+        for name in ("matri", "ply")
+    ]
+    with patch("claude_rotate.commands.status.probe_many", return_value=cands):
         from claude_rotate.commands import status
 
         status.execute(p, as_json=True)
@@ -145,6 +153,8 @@ def test_status_json_reports_live_sessions(tmp_path, capsys) -> None:
     out = json.loads(capsys.readouterr().out)
     by_name = {a["name"]: a for a in out["accounts"]}
     assert by_name["matri"]["sessions"] == {"active": 1, "idle": 0}
+    assert by_name["matri"]["claude_sessions"] == ["s-1"]
+    assert by_name["ply"]["claude_sessions"] == []
 
 
 def test_doctor_green_when_all_ok(tmp_path, capsys) -> None:

@@ -175,3 +175,18 @@ def count_load(
         bucket[rec.account] = bucket.get(rec.account, 0) + 1
     names = set(active) | set(idle)
     return {name: SessionLoad(active=active.get(name, 0), idle=idle.get(name, 0)) for name in names}
+
+
+def claude_sessions_by_account(
+    paths: Paths, *, liveness: Liveness = is_alive
+) -> dict[str, list[str]]:
+    """Claude Code session IDs of the live sessions, per account (sorted, unique).
+
+    Read-only: dead records are left for ``count_load``/``reap``. Accounts
+    without a recorded ID are absent from the result.
+    """
+    ids: dict[str, set[str]] = {}
+    for rec in read_records(paths):
+        if rec.claude_session_id and liveness(rec.pid, rec.start_time):
+            ids.setdefault(rec.account, set()).add(rec.claude_session_id)
+    return {name: sorted(found) for name, found in ids.items()}

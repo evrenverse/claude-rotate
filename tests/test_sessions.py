@@ -160,6 +160,27 @@ def test_count_load_classifies_active_idle_and_reaps(tmp_path) -> None:
     assert {r.uuid for r in sessions.read_records(p)} == {"a1", "a2", "b1"}
 
 
+def test_claude_sessions_by_account_lists_live_ids(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    for uuid, acct, pid, sid in [
+        ("u1", "a", 1, "s-2"),
+        ("u2", "a", 2, "s-1"),
+        ("u3", "b", 3, None),
+        ("u4", "c", 4, "s-3"),
+        ("u5", "a", 5, "s-1"),
+    ]:
+        sessions.write_record(
+            p, SessionRecord(uuid, acct, pid, 1.0, 2.0, 2.0, claude_session_id=sid)
+        )
+
+    def alive(pid: int, start_time: float) -> bool:
+        return pid != 4  # c's process is dead
+
+    assert sessions.claude_sessions_by_account(p, liveness=alive) == {"a": ["s-1", "s-2"]}
+
+
 def test_file_lock_acquires_and_releases(tmp_path) -> None:
     from claude_rotate.config import file_lock
 

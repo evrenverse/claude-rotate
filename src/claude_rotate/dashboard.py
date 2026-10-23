@@ -136,6 +136,8 @@ class DashboardRow:
     status: str = "ok"  # "ok" | "relogin" | "rate_limited" | "sub_canceled" | "no_data"
     note: str = ""
     session_load: SessionLoad | None = None
+    # Claude Code session IDs running on this account (status --json only).
+    claude_sessions: tuple[str, ...] = ()
     # Recent burn (%-points/sec) for the recency-aware forecast; None -> average pace.
     h5_rate_per_sec: float | None = None
     w7_rate_per_sec: float | None = None
@@ -1058,6 +1060,7 @@ def status_json(
                     if r.session_load is not None and r.session_load.open > 0
                     else None
                 ),
+                "claude_sessions": list(r.claude_sessions),
                 "subscription_expires_at": (
                     r.account.effective_expires_at.isoformat()
                     if r.account.effective_expires_at
