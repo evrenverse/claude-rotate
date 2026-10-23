@@ -104,10 +104,12 @@ def test_heartbeat_ignores_a_failed_process_lookup(tmp_path, monkeypatch, event)
     assert sessions.read_records(p) == [rec]
 
 
-def test_heartbeat_for_a_missing_record_never_asks_who_fired_it(tmp_path, monkeypatch) -> None:
+@pytest.mark.parametrize("event", ["active", "end"])
+def test_heartbeat_for_a_missing_record_never_asks_who_fired_it(
+    tmp_path, monkeypatch, event
+) -> None:
     monkeypatch.setenv("CLAUDE_ROTATE_SESSION", "gone")
+    asked: list[int] = []  # execute() swallows exceptions, so record the calls instead of raising
 
-    def must_not_run(pid: int) -> bool:
-        raise AssertionError("fired_by called")
-
-    assert execute(_paths(tmp_path), "active", fired_by=must_not_run) == 0
+    assert execute(_paths(tmp_path), event, fired_by=lambda pid: asked.append(pid) or True) == 0
+    assert asked == []
