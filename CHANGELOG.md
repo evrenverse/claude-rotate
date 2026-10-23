@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-23
+
+### Fixed
+
+- **`--version` reported 0.7.0 in 0.8.0.** It now reads the installed package's
+  version, and a test keeps it equal to `pyproject.toml`.
+
 ## [0.8.0] - 2026-10-23
 
 ### Added
