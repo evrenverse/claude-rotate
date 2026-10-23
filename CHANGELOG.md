@@ -55,9 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   forever. Every `claude-rotate run` and `status` now deletes such files once
   they are a day old; younger files are never touched.
 - **A nested `claude` no longer disturbs the outer session.** A `claude -p`
-  (or any `claude`) started inside a rotated session used to overwrite the
-  outer session's ID and delete its record when it ended. The heartbeat now
-  acts only for the session's own Claude Code process.
+  (or any `claude`) started inside a rotated session deleted the outer
+  session's record when it ended, so that session stopped counting toward its
+  account's load. The heartbeat now acts only for the session's own Claude
+  Code process.
+- **`/clear` and interactive `/resume` no longer drop the running session from
+  the registry.** Both fire the end hook although the same `claude` keeps
+  running; its record is now kept, along with the newest session ID.
 - **A malformed session file no longer crashes `run` or `status`.** A session
   file holding an out-of-range number or absurdly deep nesting is skipped like
   any other unreadable one, and deleted once it is a day old.

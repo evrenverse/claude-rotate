@@ -206,6 +206,9 @@ def _nearest_claude_is(pid: int, ancestors: Iterable[psutil.Process], record_exe
         if proc.pid == pid:
             return True
         # exe() equality also catches npm installs, which run as ``node``.
+        # shortcut: a nested claude matching neither name nor exe is missed (mixed native/npm;
+        # macOS may report the versioned binary's name) and a non-exec wrapper between the hook and
+        # rec.pid silences the heartbeat; upgrade to an argv[0]-basename check if reported.
         if proc.name() == "claude" or proc.exe() == record_exe:
             return False
     return False
