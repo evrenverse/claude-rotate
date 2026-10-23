@@ -103,7 +103,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
 | `claude-rotate sync-credentials` | Reconcile `~/.claude/.credentials.json` → `accounts.json` (cron entry point) |
 | `claude-rotate install-sync` / `--uninstall` | Install / remove the 2-minute sync crontab entry |
-| `claude-rotate install-hooks` / `--uninstall` | Install / remove the heartbeat hook in `~/.claude/settings.json` for precise active/idle session classification (enables load-aware distribution across concurrent runs). The hook also records each Claude Code session ID, so `status --json` can map sessions to accounts (`claude_sessions`) — tools such as `paseo-limit-watch` rely on it |
+| `claude-rotate install-hooks` / `--uninstall` | Install / remove the heartbeat hook in `~/.claude/settings.json` for precise active/idle session classification (enables load-aware distribution across concurrent runs). The hook also maps Claude Code sessions to accounts (`claude_sessions` in `status --json`), so a tool that knows only a Claude Code session ID can find the account it runs on |
 | `claude-rotate install-skill` / `--uninstall` | Install / remove the bundled agent skill (canonical `~/.agents/skills/account`, symlinked into every detected agent) |
 | `claude-rotate cleanup [--yes]` | Delete all rotate state (accounts, cache, logs) |
 | `claude-rotate doctor` | Self-check (binary, config, tokens, refresh-token staleness) |
