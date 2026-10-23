@@ -64,3 +64,10 @@ def test_session_paths_and_constants() -> None:
     assert SESSION_ACTIVE_WINDOW_SECONDS == 90
     assert SESSION_IDLE_WEIGHT == 0.3
     assert SESSION_LOAD_PENALTY == 0.25
+
+
+def test_atomic_write_json_defaults_sort_and_escape(tmp_path: Path) -> None:
+    target = tmp_path / "out.json"
+    config.atomic_write_json(target, {"b": "ü", "a": 1})
+    assert target.read_text(encoding="utf-8") == '{\n  "a": 1,\n  "b": "\\u00fc"\n}\n'
+    assert target.stat().st_mode & 0o777 == 0o600

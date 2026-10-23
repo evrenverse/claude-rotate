@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A malformed session file no longer crashes `run` or `status`.** A session
   file holding an out-of-range number or absurdly deep nesting is skipped like
   any other unreadable one, and deleted once it is a day old.
+- **`install-hooks` changes only the heartbeat hooks.** It and `--uninstall`
+  used to rewrite all of `~/.claude/settings.json`: keys sorted, non-ASCII
+  characters escaped, mode forced to 0644, and a symlinked file replaced by a
+  regular one. The file now keeps its key order, characters and mode, and a
+  symlink stays a symlink.
 
 ## [0.7.0] - 2026-08-06
 
