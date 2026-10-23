@@ -18,7 +18,9 @@ from typing import TextIO
 from claude_rotate import sessions
 from claude_rotate.config import Paths
 
-_MAX_HOOK_INPUT = 1 << 20  # 1 MiB; a hook payload is a few hundred bytes
+# UserPromptSubmit input carries the full prompt. A payload over 1 MiB is truncated, fails to
+# parse, and the previous session ID is kept.
+_MAX_HOOK_INPUT = 1 << 20
 
 
 def read_hook_session_id(stream: TextIO) -> str | None:
