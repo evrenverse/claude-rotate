@@ -95,7 +95,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate list` | Show configured accounts (no network) |
 | `claude-rotate status` | Live dashboard + health exit code. Adds an *other providers* table for the Codex and Gemini subscriptions on this machine, when present |
 | `claude-rotate status --report` | Compact single-table overview: running account (`@`), next pick (`>`), per-window resets (clock + weekday + relative) and warnings |
-| `claude-rotate status --json` | Machine-readable state |
+| `claude-rotate status --json` | Machine-readable state; each account lists its live Claude Code session IDs in `claude_sessions` |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |
 | `claude-rotate disable <name>` / `enable <name>` | Take an account out of rotation (never auto-picked, still probed + shown greyed-out) / put it back |
 | `claude-rotate set-expiry <name> <value>` | Override subscription expiry (`YYYY-MM-DD`, `Nd`, or `""`) |
@@ -103,7 +103,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
 | `claude-rotate sync-credentials` | Reconcile `~/.claude/.credentials.json` → `accounts.json` (cron entry point) |
 | `claude-rotate install-sync` / `--uninstall` | Install / remove the 2-minute sync crontab entry |
-| `claude-rotate install-hooks` / `--uninstall` | Install / remove the heartbeat hook in `~/.claude/settings.json` for precise active/idle session classification (enables load-aware distribution across concurrent runs) |
+| `claude-rotate install-hooks` / `--uninstall` | Install / remove the heartbeat hook in `~/.claude/settings.json` for precise active/idle session classification (enables load-aware distribution across concurrent runs). The hook also records each Claude Code session ID, so `status --json` can map sessions to accounts (`claude_sessions`) — tools such as `paseo-limit-watch` rely on it |
 | `claude-rotate install-skill` / `--uninstall` | Install / remove the bundled agent skill (canonical `~/.agents/skills/account`, symlinked into every detected agent) |
 | `claude-rotate cleanup [--yes]` | Delete all rotate state (accounts, cache, logs) |
 | `claude-rotate doctor` | Self-check (binary, config, tokens, refresh-token staleness) |
