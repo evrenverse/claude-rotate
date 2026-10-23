@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -104,6 +104,11 @@ def _parse(path: Path) -> SessionRecord | None:
         return None
 
 
+def read_record(paths: Paths, uuid: str) -> SessionRecord | None:
+    """One session record, or None if it is missing or not a record."""
+    return _parse(_record_path(paths, uuid))
+
+
 def read_records(paths: Paths) -> list[SessionRecord]:
     """Read all session records. Corrupt/partial files are skipped."""
     out: list[SessionRecord] = []
@@ -148,7 +153,7 @@ def remove_record(paths: Paths, uuid: str) -> None:
 def touch(paths: Paths, uuid: str, *, now: float, claude_session_id: str | None = None) -> None:
     """Refresh last_active on an existing record, and replace the Claude session
     ID when one is given. No-op if the record is gone."""
-    rec = _parse(_record_path(paths, uuid))
+    rec = read_record(paths, uuid)
     if rec is None:
         return
     from dataclasses import replace
@@ -180,6 +185,34 @@ def is_alive(pid: int, start_time: float) -> bool:
     if actual is None:
         return False
     return abs(actual - start_time) <= _START_TIME_TOLERANCE
+
+
+# Is the Claude Code process that fired the running hook ``pid``?
+HookOwner = Callable[[int], bool]
+
+
+def _nearest_claude_is(pid: int, ancestors: Iterable[psutil.Process], record_exe: str) -> bool:
+    """True iff ``pid`` is the first Claude Code process in ``ancestors`` (nearest first)."""
+    for proc in ancestors:
+        if proc.pid == pid:
+            return True
+        # exe() equality also catches npm installs, which run as ``node``.
+        if proc.name() == "claude" or proc.exe() == record_exe:
+            return False
+    return False
+
+
+def hook_fired_by(pid: int) -> bool:
+    """True iff the nearest Claude Code ancestor of this process is ``pid``.
+
+    A nested ``claude -p`` has ``pid`` as a further ancestor too, so only the
+    nearest one tells whose hook this is. Reads ancestors' name/exe only; any
+    failure means False.
+    """
+    try:
+        return _nearest_claude_is(pid, psutil.Process().parents(), psutil.Process(pid).exe())
+    except Exception:
+        return False
 
 
 def reap(paths: Paths, *, liveness: Liveness = is_alive) -> None:

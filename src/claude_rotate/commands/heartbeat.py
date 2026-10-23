@@ -2,9 +2,11 @@
 
 ``active`` (UserPromptSubmit) refreshes the session's last_active and records
 Claude Code's ``session_id`` from the hook JSON on stdin;
-``end`` (SessionEnd) removes the record. Reads CLAUDE_ROTATE_SESSION from the
-environment (injected by exec_claude). Must NEVER fail — a broken hook must not
-disrupt the claude session — so it always returns 0 and swallows everything.
+``end`` (SessionEnd) removes the record. Acts only when the hook was fired by
+the session's own Claude Code process, not by a nested ``claude -p``. Reads
+CLAUDE_ROTATE_SESSION from the environment (injected by exec_claude). Must
+NEVER fail — a broken hook must not disrupt the claude session — so it always
+returns 0 and swallows everything.
 """
 
 from __future__ import annotations
@@ -34,10 +36,16 @@ def read_hook_session_id(stream: TextIO) -> str | None:
     return session_id if isinstance(session_id, str) and session_id else None
 
 
-def execute(paths: Paths, event: str) -> int:
+def execute(
+    paths: Paths, event: str, *, fired_by: sessions.HookOwner = sessions.hook_fired_by
+) -> int:
     try:
         uuid = os.environ.get("CLAUDE_ROTATE_SESSION")
         if not uuid:
+            return 0
+        # A nested `claude -p` inherits CLAUDE_ROTATE_SESSION; its hooks must not touch our record.
+        rec = sessions.read_record(paths, uuid)
+        if rec is None or not fired_by(rec.pid):
             return 0
         if event == "end":
             sessions.remove_record(paths, uuid)
