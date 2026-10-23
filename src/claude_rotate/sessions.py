@@ -29,6 +29,7 @@ class SessionRecord:
     start_time: float
     started_at: float
     last_active: float
+    claude_session_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -38,10 +39,12 @@ class SessionRecord:
             "start_time": self.start_time,
             "started_at": self.started_at,
             "last_active": self.last_active,
+            "claude_session_id": self.claude_session_id,
         }
 
     @classmethod
     def from_dict(cls, raw: dict[str, object]) -> SessionRecord:
+        claude_session_id = raw.get("claude_session_id")  # absent in records from older versions
         return cls(
             uuid=str(raw["uuid"]),
             account=str(raw["account"]),
@@ -49,6 +52,7 @@ class SessionRecord:
             start_time=float(raw["start_time"]),  # type: ignore[arg-type]
             started_at=float(raw["started_at"]),  # type: ignore[arg-type]
             last_active=float(raw["last_active"]),  # type: ignore[arg-type]
+            claude_session_id=claude_session_id if isinstance(claude_session_id, str) else None,
         )
 
 
@@ -100,8 +104,9 @@ def remove_record(paths: Paths, uuid: str) -> None:
         return
 
 
-def touch(paths: Paths, uuid: str, *, now: float) -> None:
-    """Refresh last_active on an existing record. No-op if it is gone."""
+def touch(paths: Paths, uuid: str, *, now: float, claude_session_id: str | None = None) -> None:
+    """Refresh last_active on an existing record, and replace the Claude session
+    ID when one is given. No-op if the record is gone."""
     path = _record_path(paths, uuid)
     try:
         rec = SessionRecord.from_dict(json.loads(path.read_text()))
@@ -109,7 +114,10 @@ def touch(paths: Paths, uuid: str, *, now: float) -> None:
         return
     from dataclasses import replace
 
-    write_record(paths, replace(rec, last_active=now))
+    write_record(
+        paths,
+        replace(rec, last_active=now, claude_session_id=claude_session_id or rec.claude_session_id),
+    )
 
 
 # A liveness predicate: (pid, start_time) -> still the same live process?

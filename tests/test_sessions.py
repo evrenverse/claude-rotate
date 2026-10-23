@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from claude_rotate.config import Paths
@@ -53,6 +54,47 @@ def test_touch_updates_last_active(tmp_path) -> None:
     sessions.write_record(p, SessionRecord("u1", "matri", 1, 1.0, 2.0, 2.0))
     sessions.touch(p, "u1", now=99.0)
     assert sessions.read_records(p)[0].last_active == 99.0
+
+
+def test_record_round_trips_claude_session_id(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    rec = SessionRecord("u1", "acct", 1, 1.0, 2.0, 2.0, claude_session_id="s-1")
+    sessions.write_record(p, rec)
+    assert sessions.read_records(p) == [rec]
+
+
+def test_record_without_claude_session_id_still_reads(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    p.sessions_dir.mkdir(parents=True)
+    (p.sessions_dir / "u1.json").write_text(
+        json.dumps(
+            {
+                "uuid": "u1",
+                "account": "acct",
+                "pid": 1,
+                "start_time": 1.0,
+                "started_at": 2.0,
+                "last_active": 2.0,
+            }
+        )
+    )
+    assert sessions.read_records(p)[0].claude_session_id is None
+
+
+def test_touch_sets_and_replaces_claude_session_id(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    sessions.write_record(p, SessionRecord("u1", "acct", 1, 1.0, 2.0, 2.0))
+    sessions.touch(p, "u1", now=3.0, claude_session_id="s-1")
+    sessions.touch(p, "u1", now=4.0, claude_session_id="s-2")
+    sessions.touch(p, "u1", now=5.0)
+    rec = sessions.read_records(p)[0]
+    assert (rec.last_active, rec.claude_session_id) == (5.0, "s-2")
 
 
 def test_read_records_ignores_corrupt_files(tmp_path) -> None:
