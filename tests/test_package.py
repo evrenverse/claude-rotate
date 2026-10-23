@@ -1,10 +1,18 @@
 import re
+import tomllib
+from pathlib import Path
 
 from claude_rotate import __version__
 
 
 def test_version_is_set() -> None:
     assert re.fullmatch(r"\d+\.\d+\.\d+", __version__)
+
+
+def test_version_matches_pyproject() -> None:
+    """`--version` must never lag behind a release bump (0.8.0 shipped reporting 0.7.0)."""
+    pyproject = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text())
+    assert __version__ == pyproject["project"]["version"]
 
 
 def test_main_module_invokes_cli_main(monkeypatch) -> None:  # type: ignore[no-untyped-def]
