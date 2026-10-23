@@ -52,6 +52,7 @@ class SessionRecord:
             start_time=float(raw["start_time"]),  # type: ignore[arg-type]
             started_at=float(raw["started_at"]),  # type: ignore[arg-type]
             last_active=float(raw["last_active"]),  # type: ignore[arg-type]
+            # Only add optional keys: versions running side by side reap records they cannot parse.
             # Absent in records from older versions. Keep this after the indexed reads above:
             # non-object JSON must fail there with TypeError (which callers catch), not on .get.
             claude_session_id=sid if isinstance(sid := raw.get("claude_session_id"), str) else None,
@@ -85,11 +86,21 @@ def write_record(paths: Paths, record: SessionRecord) -> None:
         return
 
 
+# Raised for content that is not a session record. ValueError also covers the
+# UnicodeDecodeError of non-UTF-8 bytes. An OSError is a failed read, not a verdict.
+_NOT_A_RECORD = (json.JSONDecodeError, KeyError, ValueError, TypeError)
+
+
+def _record_from(data: bytes) -> SessionRecord:
+    """The record in ``data``; raises one of ``_NOT_A_RECORD`` if it is not one."""
+    return SessionRecord.from_dict(json.loads(data))
+
+
 def _parse(path: Path) -> SessionRecord | None:
     """The record in ``path``, or None if the file is unreadable or not a record."""
     try:
-        return SessionRecord.from_dict(json.loads(path.read_text()))
-    except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return _record_from(path.read_bytes())
+    except (OSError, *_NOT_A_RECORD):
         return None
 
 
@@ -113,7 +124,12 @@ def reap_unreadable(paths: Paths, *, now: float, min_age: float = 86_400) -> int
         return removed
     for path in paths.sessions_dir.glob("*.json"):
         try:
-            if now - path.stat().st_mtime > min_age and _parse(path) is None:
+            if now - path.stat().st_mtime <= min_age:
+                continue
+            data = path.read_bytes()  # a failed read must never count as "not a record"
+            try:
+                _record_from(data)
+            except _NOT_A_RECORD:
                 path.unlink()
                 removed += 1
         except OSError:
