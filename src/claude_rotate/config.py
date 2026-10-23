@@ -197,7 +197,13 @@ def file_lock(lock_path: Path, *, timeout: int = LOCK_TIMEOUT_SECONDS) -> Iterat
 
 
 def atomic_write_json(
-    path: Path, payload: object, *, mode: int = 0o600, indent: int | None = 2
+    path: Path,
+    payload: object,
+    *,
+    mode: int = 0o600,
+    indent: int | None = 2,
+    sort_keys: bool = True,
+    ensure_ascii: bool = True,
 ) -> None:
     """Serialise ``payload`` to ``path`` atomically.
 
@@ -210,14 +216,16 @@ def atomic_write_json(
 
     ``indent=None`` writes compact JSON, used for the high-churn cache and
     session records where readability does not pay for the bytes.
+    ``sort_keys=False`` / ``ensure_ascii=False`` write a user-owned file in the
+    order and characters it came with.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_str = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.tmp-")
     tmp = Path(tmp_str)
     try:
         tmp.chmod(mode)
-        with os.fdopen(fd, "w") as f:
-            json.dump(payload, f, indent=indent, sort_keys=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=indent, sort_keys=sort_keys, ensure_ascii=ensure_ascii)
             f.write("\n")
         tmp.replace(path)
     finally:

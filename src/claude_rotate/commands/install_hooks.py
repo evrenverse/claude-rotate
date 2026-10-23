@@ -13,6 +13,7 @@ accounts. The hook learns its account/session from the injected env vars.
 from __future__ import annotations
 
 import json
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -37,7 +38,7 @@ def _load(settings_path: Path) -> dict[str, Any]:
     if not settings_path.exists():
         return {}
     try:
-        data = json.loads(settings_path.read_text())
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(
             f"{settings_path} is unreadable/corrupt; refusing to overwrite: {exc}"
@@ -48,8 +49,10 @@ def _load(settings_path: Path) -> dict[str, Any]:
 
 
 def _save(settings_path: Path, data: dict[str, Any]) -> None:
-    # Not secret, so 0o644 — unlike the credential and account files.
-    atomic_write_json(settings_path, data, mode=0o644)
+    target = settings_path.resolve()  # write through a symlink instead of replacing it
+    # `env` may hold secrets: keep the user's mode, never loosen it.
+    mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else 0o600
+    atomic_write_json(target, data, mode=mode, sort_keys=False, ensure_ascii=False)
 
 
 def _event_has_command(groups: list[Any], command: str) -> bool:
