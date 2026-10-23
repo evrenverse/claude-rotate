@@ -12,6 +12,7 @@ Pure + testable: process liveness and ``now`` are injectable.
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,17 +85,40 @@ def write_record(paths: Paths, record: SessionRecord) -> None:
         return
 
 
+def _parse(path: Path) -> SessionRecord | None:
+    """The record in ``path``, or None if the file is unreadable or not a record."""
+    try:
+        return SessionRecord.from_dict(json.loads(path.read_text()))
+    except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+        return None
+
+
 def read_records(paths: Paths) -> list[SessionRecord]:
     """Read all session records. Corrupt/partial files are skipped."""
     out: list[SessionRecord] = []
     if not paths.sessions_dir.is_dir():
         return out
     for path in sorted(paths.sessions_dir.glob("*.json")):
-        try:
-            out.append(SessionRecord.from_dict(json.loads(path.read_text())))
-        except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
-            continue
+        if (rec := _parse(path)) is not None:
+            out.append(rec)
     return out
+
+
+def reap_unreadable(paths: Paths, *, now: float, min_age: float = 86_400) -> int:
+    """Delete session files that no longer parse as a record (e.g. left behind by an
+    older format) once they are older than ``min_age`` seconds, so a fresh partial
+    write is never touched. Best-effort; returns how many files were deleted."""
+    removed = 0
+    if not paths.sessions_dir.is_dir():
+        return removed
+    for path in paths.sessions_dir.glob("*.json"):
+        try:
+            if now - path.stat().st_mtime > min_age and _parse(path) is None:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def remove_record(paths: Paths, uuid: str) -> None:
@@ -108,10 +132,8 @@ def remove_record(paths: Paths, uuid: str) -> None:
 def touch(paths: Paths, uuid: str, *, now: float, claude_session_id: str | None = None) -> None:
     """Refresh last_active on an existing record, and replace the Claude session
     ID when one is given. No-op if the record is gone."""
-    path = _record_path(paths, uuid)
-    try:
-        rec = SessionRecord.from_dict(json.loads(path.read_text()))
-    except (OSError, json.JSONDecodeError, KeyError, ValueError, TypeError):
+    rec = _parse(_record_path(paths, uuid))
+    if rec is None:
         return
     from dataclasses import replace
 
@@ -145,7 +167,8 @@ def is_alive(pid: int, start_time: float) -> bool:
 
 
 def reap(paths: Paths, *, liveness: Liveness = is_alive) -> None:
-    """Delete records whose backing process is no longer alive."""
+    """Delete records whose backing process is no longer alive, and old unparseable files."""
+    reap_unreadable(paths, now=time.time())
     for rec in read_records(paths):
         if not liveness(rec.pid, rec.start_time):
             remove_record(paths, rec.uuid)
@@ -158,13 +181,15 @@ def count_load(
     active_window: float,
     liveness: Liveness = is_alive,
 ) -> dict[str, SessionLoad]:
-    """Per-account live-session load. Reaps dead records as a side effect.
+    """Per-account live-session load. Reaps dead records and old unparseable files
+    as a side effect.
 
     A record is *active* when its ``last_active`` is younger than
     ``active_window`` (freshly launched sessions qualify because last_active is
     initialised to started_at), otherwise *idle*. Accounts with no live session
     are absent from the result.
     """
+    reap_unreadable(paths, now=now)
     active: dict[str, int] = {}
     idle: dict[str, int] = {}
     for rec in read_records(paths):
