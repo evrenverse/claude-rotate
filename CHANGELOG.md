@@ -38,6 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` answers 403
   `SUBSCRIPTION_REQUIRED`. Antigravity's own `/usage` is the supported route.
 
+- **Claude Code session IDs per account in `status --json`.** Every account
+  object gains a `claude_sessions` list: the sorted, de-duplicated Claude Code
+  session IDs of that account's live sessions, `[]` when there are none. Tools
+  that only know a Claude session can now tell which account it runs on, and
+  so which account's limit reset applies. The IDs come from the heartbeat hook
+  (`install-hooks`), which now reads Claude Code's hook input and keeps the
+  newest `session_id` (it changes on `/clear`); the hook command is unchanged,
+  so an installed hook needs no reinstall. A session has no ID until its first
+  prompt, or if the hook is not installed. Existing fields are unchanged.
+
+### Fixed
+
+- **Session files left by an older format are removed.** A file in the
+  sessions directory that no longer parses as a session record was skipped
+  forever. `count_load` and `reap` now delete such files once they are over a
+  day old, so a half-written file is never touched.
+
 ## [0.7.0] - 2026-08-06
 
 ### Added
