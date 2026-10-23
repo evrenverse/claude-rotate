@@ -113,3 +113,26 @@ def test_heartbeat_for_a_missing_record_never_asks_who_fired_it(
 
     assert execute(_paths(tmp_path), event, fired_by=lambda pid: asked.append(pid) or True) == 0
     assert asked == []
+
+
+@pytest.mark.parametrize("reason", ["clear", "resume"])
+def test_heartbeat_end_keeps_the_record_of_a_session_that_keeps_running(
+    tmp_path, monkeypatch, reason
+) -> None:
+    p, rec = _own_session(tmp_path, monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO(f'{{"reason": "{reason}"}}'))
+    assert execute(p, "end", fired_by=_own) == 0
+    assert sessions.read_records(p) == [rec]
+
+
+@pytest.mark.parametrize(
+    "stdin",
+    [f'{{"reason": "{r}"}}' for r in ("logout", "prompt_input_exit", "other")] + ["", "not json"],
+)
+def test_heartbeat_end_removes_the_record_for_any_other_reason(
+    tmp_path, monkeypatch, stdin
+) -> None:
+    p, _ = _own_session(tmp_path, monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
+    assert execute(p, "end", fired_by=_own) == 0
+    assert sessions.read_records(p) == []
