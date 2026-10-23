@@ -87,8 +87,17 @@ def write_record(paths: Paths, record: SessionRecord) -> None:
 
 
 # Raised for content that is not a session record. ValueError also covers the
-# UnicodeDecodeError of non-UTF-8 bytes. An OSError is a failed read, not a verdict.
-_NOT_A_RECORD = (json.JSONDecodeError, KeyError, ValueError, TypeError)
+# UnicodeDecodeError of non-UTF-8 bytes; OverflowError is ``int(inf)`` from a ``1e999``
+# pid and RecursionError is json.loads on absurdly nested input. An OSError is a
+# failed read, not a verdict.
+_NOT_A_RECORD = (
+    json.JSONDecodeError,
+    KeyError,
+    ValueError,
+    TypeError,
+    OverflowError,
+    RecursionError,
+)
 
 
 def _record_from(data: bytes) -> SessionRecord:
