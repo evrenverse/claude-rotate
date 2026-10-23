@@ -135,7 +135,11 @@ _LEGACY = {
 def _write_aged(path: Path, body: object, *, age: float, now: float) -> Path:
     import os
 
-    path.write_text(json.dumps(body))
+    # str and bytes are written raw, anything else as JSON.
+    if isinstance(body, bytes):
+        path.write_bytes(body)
+    else:
+        path.write_text(body if isinstance(body, str) else json.dumps(body))
     os.utime(path, (now - age, now - age))
     return path
 
@@ -150,16 +154,39 @@ def test_reap_unreadable_deletes_only_old_unparseable_files(tmp_path) -> None:
     old = _write_aged(p.sessions_dir / "old.json", _LEGACY, age=2 * day, now=now)
     fresh = _write_aged(p.sessions_dir / "fresh.json", _LEGACY, age=3_600.0, now=now)
     garbage = _write_aged(p.sessions_dir / "garbage.json", "{not json", age=2 * day, now=now)
+    # Not UTF-8: counts as "not a record", unlike a failed read.
+    binary = _write_aged(p.sessions_dir / "binary.json", b"\x80\x81", age=2 * day, now=now)
     # Valid records stay however old they are, with or without claude_session_id.
     valid = SessionRecord("u1", "matri", 1, 1.0, 2.0, 2.0)
     kept = _write_aged(p.sessions_dir / "u1.json", valid.to_dict(), age=2 * day, now=now)
     older = {k: v for k, v in valid.to_dict().items() if k != "claude_session_id"}
     kept_older = _write_aged(p.sessions_dir / "u2.json", older, age=2 * day, now=now)
 
-    assert sessions.reap_unreadable(p, now=now) == 2
+    assert sessions.reap_unreadable(p, now=now) == 3
 
-    assert not old.exists() and not garbage.exists()
+    assert not old.exists() and not garbage.exists() and not binary.exists()
     assert fresh.exists() and kept.exists() and kept_older.exists()
+
+
+def test_reap_unreadable_keeps_a_valid_record_that_failed_to_read(tmp_path, monkeypatch) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    p.sessions_dir.mkdir(parents=True)
+    now = 1_000_000.0
+    valid = SessionRecord("u1", "matri", 1, 1.0, 2.0, 2.0)
+    idle = _write_aged(p.sessions_dir / "u1.json", valid.to_dict(), age=2 * 86_400.0, now=now)
+    real_open = Path.open
+
+    def flaky_open(self: Path, *args: object, **kwargs: object):
+        if self == idle:  # e.g. EMFILE/EIO after a successful stat
+            raise OSError("read failed")
+        return real_open(self, *args, **kwargs)  # type: ignore[call-overload]
+
+    monkeypatch.setattr(Path, "open", flaky_open)
+
+    assert sessions.reap_unreadable(p, now=now) == 0
+    assert idle.exists()
 
 
 def test_reap_unreadable_without_sessions_dir_is_a_noop(tmp_path) -> None:
