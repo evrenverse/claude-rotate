@@ -270,6 +270,92 @@ def test_claude_sessions_by_account_lists_live_ids(tmp_path) -> None:
     assert sessions.claude_sessions_by_account(p, liveness=alive) == {"a": ["s-1", "s-2"]}
 
 
+def test_read_record_returns_one_record_or_none(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    rec = SessionRecord("u1", "acct", 1, 1.0, 2.0, 2.0)
+    sessions.write_record(p, rec)
+    (p.sessions_dir / "bad.json").write_text("{not json")
+    assert sessions.read_record(p, "u1") == rec
+    assert sessions.read_record(p, "missing") is None
+    assert sessions.read_record(p, "bad") is None
+
+
+class _Proc:
+    def __init__(self, pid: int, name: str = "zsh", exe: str = "/bin/zsh") -> None:
+        self.pid, self._name, self._exe = pid, name, exe
+
+    def name(self) -> str:
+        return self._name
+
+    def exe(self) -> str:
+        return self._exe
+
+
+_CLAUDE_EXE = "/home/u/.local/share/claude/versions/2.1.0"
+
+
+def _claude(pid: int) -> _Proc:
+    return _Proc(pid, "claude", _CLAUDE_EXE)
+
+
+def test_nearest_claude_is_the_record_process() -> None:
+    from claude_rotate.sessions import _nearest_claude_is
+
+    assert _nearest_claude_is(10, [_Proc(11), _claude(10)], _CLAUDE_EXE)
+
+
+def test_nearest_claude_is_a_nested_one() -> None:
+    from claude_rotate.sessions import _nearest_claude_is
+
+    chain = [_Proc(31), _claude(30), _Proc(11), _claude(10)]  # hook, nested claude, shell, outer
+    assert not _nearest_claude_is(10, chain, _CLAUDE_EXE)
+
+
+def test_nearest_claude_found_by_exe_when_named_node() -> None:
+    from claude_rotate.sessions import _nearest_claude_is
+
+    nested = _Proc(30, "node", _CLAUDE_EXE)
+    assert not _nearest_claude_is(10, [_Proc(31), nested, _Proc(11), _claude(10)], _CLAUDE_EXE)
+
+
+def test_nearest_claude_is_false_without_the_record_process() -> None:
+    from claude_rotate.sessions import _nearest_claude_is
+
+    assert not _nearest_claude_is(10, [_Proc(11), _Proc(12)], _CLAUDE_EXE)
+
+
+def test_hook_fired_by_walks_the_real_ancestors(monkeypatch) -> None:
+    from claude_rotate import sessions
+
+    class Fake:
+        def __init__(self, pid: int | None = None) -> None:
+            self.pid = pid
+
+        def parents(self) -> list[_Proc]:
+            return [_Proc(11), _claude(10)]
+
+        def exe(self) -> str:
+            return _CLAUDE_EXE
+
+    monkeypatch.setattr("psutil.Process", Fake)
+    assert sessions.hook_fired_by(10)
+    assert not sessions.hook_fired_by(99)
+
+
+def test_hook_fired_by_is_false_when_the_process_lookup_fails(monkeypatch) -> None:
+    import psutil
+
+    from claude_rotate import sessions
+
+    def boom(pid: int | None = None) -> None:
+        raise psutil.NoSuchProcess(1)
+
+    monkeypatch.setattr("psutil.Process", boom)
+    assert not sessions.hook_fired_by(10)
+
+
 def test_file_lock_acquires_and_releases(tmp_path) -> None:
     from claude_rotate.config import file_lock
 
