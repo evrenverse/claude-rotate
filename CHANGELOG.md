@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (or any `claude`) started inside a rotated session used to overwrite the
   outer session's ID and delete its record when it ended. The heartbeat now
   acts only for the session's own Claude Code process.
+- **A malformed session file no longer crashes `run` or `status`.** A session
+  file holding an out-of-range number or absurdly deep nesting is skipped like
+  any other unreadable one, and deleted once it is a day old.
 
 ## [0.7.0] - 2026-08-06
 

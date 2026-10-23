@@ -189,6 +189,57 @@ def test_reap_unreadable_keeps_a_valid_record_that_failed_to_read(tmp_path, monk
     assert idle.exists()
 
 
+# Files that json.loads or from_dict choke on with errors beyond the usual decode ones.
+_ESCAPING_BODIES = {
+    # json.loads gives float("inf") and int(inf) raises OverflowError.
+    "overflow": json.dumps(
+        {**SessionRecord("x", "a", 1, 1.0, 2.0, 2.0).to_dict(), "pid": "@"}
+    ).replace('"@"', "1e999"),
+    # json.loads raises RecursionError.
+    "nested": "[" * 100_000 + "]" * 100_000,
+}
+
+
+def test_overflowing_and_too_deep_files_are_skipped_not_raised(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    now = 1000.0
+    sessions.write_record(p, SessionRecord("u1", "a", 1, 1.0, 2.0, now, claude_session_id="s-1"))
+    for name, body in _ESCAPING_BODIES.items():
+        _write_aged(p.sessions_dir / f"{name}.json", body, age=60.0, now=now)
+
+    assert [r.uuid for r in sessions.read_records(p)] == ["u1"]
+    assert sessions.count_load(p, now=now, active_window=90.0, liveness=lambda *_: True) == {
+        "a": SessionLoad(active=1, idle=0)
+    }
+    assert sessions.claude_sessions_by_account(p, liveness=lambda *_: True) == {"a": ["s-1"]}
+    for name, body in _ESCAPING_BODIES.items():
+        sessions.touch(p, name, now=now, claude_session_id="s-2")  # no-op, must not raise
+        assert (p.sessions_dir / f"{name}.json").read_text() == body
+
+
+def test_reap_unreadable_deletes_overflowing_and_too_deep_files_once_old(tmp_path) -> None:
+    from claude_rotate import sessions
+
+    p = _paths(tmp_path)
+    p.sessions_dir.mkdir(parents=True)
+    now = 1_000_000.0
+    old = [
+        _write_aged(p.sessions_dir / f"old-{name}.json", body, age=2 * 86_400.0, now=now)
+        for name, body in _ESCAPING_BODIES.items()
+    ]
+    fresh = [
+        _write_aged(p.sessions_dir / f"fresh-{name}.json", body, age=3_600.0, now=now)
+        for name, body in _ESCAPING_BODIES.items()
+    ]
+
+    assert sessions.reap_unreadable(p, now=now) == 2
+
+    assert not any(path.exists() for path in old)
+    assert all(path.exists() for path in fresh)
+
+
 def test_reap_unreadable_without_sessions_dir_is_a_noop(tmp_path) -> None:
     from claude_rotate import sessions
 
