@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import argparse
 import sys
+from dataclasses import replace
 
 from claude_rotate.accounts import Store, resolve_name
 from claude_rotate.config import Paths
+from claude_rotate.groups import without_member
+from claude_rotate.settings import load_config, save_config
 
 
 def execute(paths: Paths, args: argparse.Namespace) -> int:
@@ -30,6 +33,11 @@ def execute(paths: Paths, args: argparse.Namespace) -> int:
 
     del accounts[name]
     store.save(accounts)
+
+    cfg = load_config(paths, apply_env=False)  # never persist the env override
+    groups = without_member(cfg.groups, name)
+    if groups != cfg.groups:
+        save_config(paths, replace(cfg, groups=groups))
 
     # Delete associated caches
     usage = paths.usage_dir / f"{name}.json"

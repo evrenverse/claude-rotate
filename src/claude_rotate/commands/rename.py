@@ -8,6 +8,8 @@ from dataclasses import replace
 
 from claude_rotate.accounts import Store, resolve_name, validate_account_name
 from claude_rotate.config import Paths
+from claude_rotate.groups import with_member_renamed
+from claude_rotate.settings import load_config, save_config
 
 
 def execute(paths: Paths, args: argparse.Namespace) -> int:
@@ -26,6 +28,11 @@ def execute(paths: Paths, args: argparse.Namespace) -> int:
     acct = accounts.pop(old)
     accounts[args.new] = replace(acct, name=args.new)
     store.save(accounts)
+
+    cfg = load_config(paths, apply_env=False)  # never persist the env override
+    groups = with_member_renamed(cfg.groups, old, args.new)
+    if groups != cfg.groups:
+        save_config(paths, replace(cfg, groups=groups))
 
     # Move usage cache if it exists
     old_cache = paths.usage_dir / f"{old}.json"

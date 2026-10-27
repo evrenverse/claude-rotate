@@ -8,6 +8,8 @@ from unittest.mock import patch
 
 from claude_rotate.accounts import Account, Store
 from claude_rotate.config import Paths
+from claude_rotate.groups import Group
+from claude_rotate.settings import RotateConfig, load_config, save_config
 
 
 def _paths(tmp_path: Path) -> Paths:
@@ -138,3 +140,44 @@ def test_login_from_env_delegates_to_do_login_from_env(tmp_path) -> None:
         )
     assert rc == 0
     mock.assert_called_once()
+
+
+def _group_config(p: Paths, **groups: Group) -> None:
+    save_config(p, RotateConfig(session_isolation=True, groups=groups))
+
+
+def test_rename_updates_group_membership(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"a": _acc("a"), "b": _acc("b")})
+    _group_config(p, g=Group("g", ("a", "b"), ("/x",)))
+    from claude_rotate.commands import rename
+
+    assert rename.execute(p, SimpleNamespace(old="a", new="z")) == 0
+    cfg = load_config(p, apply_env=False)
+    assert cfg.groups["g"] == Group("g", ("z", "b"), ("/x",))
+    assert cfg.session_isolation is True
+
+
+def test_remove_drops_group_membership(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"a": _acc("a")})
+    _group_config(p, g=Group("g", ("a",), ("/x",)))
+    from claude_rotate.commands import remove
+
+    assert remove.execute(p, SimpleNamespace(name="a", yes=True)) == 0
+    assert load_config(p, apply_env=False).groups["g"] == Group("g", (), ("/x",))
+
+
+def test_rename_and_remove_leave_config_alone_without_groups(tmp_path) -> None:
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"a": _acc("a"), "b": _acc("b")})
+    from claude_rotate.commands import remove, rename
+
+    assert rename.execute(p, SimpleNamespace(old="a", new="z")) == 0
+    assert remove.execute(p, SimpleNamespace(name="b", yes=True)) == 0
+    assert not p.config_file.exists()

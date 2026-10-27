@@ -29,6 +29,7 @@ ROTATOR_COMMANDS = {
     "install-hooks",
     "__heartbeat",
     "config",
+    "group",
 }
 ROTATOR_ROOT_FLAGS = {"--version", "-V", "--help", "-h"}
 
@@ -46,7 +47,8 @@ Commands:
   unpin        Resume rotation
   disable      Exclude an account from rotation (manual, reversible)
   enable       Re-include a disabled account in rotation
-  status       Show the quota dashboard
+  group        Group accounts and bind groups to directories
+  status      Show the quota dashboard
   doctor       Self-check: binary, config, network
   set-expiry   Override subscription end date manually
   cleanup      Delete all claude-rotate state (accounts, cache, logs)
@@ -161,6 +163,56 @@ Arguments:
 Options:
   -h, --help           Show this help\
 """
+
+_GROUP_DESCRIPTION = """\
+Group accounts and bind groups to directories.
+
+A group bound to a directory (and everything below it, git worktrees of
+that repo included) is the only source of accounts for sessions started
+there; its accounts are used nowhere else. A group without directories
+reserves nothing. Binding needs session isolation.\
+"""
+
+_GROUP_EPILOG = """\
+Actions:
+  create <group>                  Create an empty group
+  delete <group>                  Delete a group (its accounts become ungrouped)
+  add <group> <account>...        Add accounts; moves them out of any other group
+  remove <group> <account>...     Take accounts out of the group
+  bind <group> [DIR]              Bind the group to DIR (default: current directory)
+  unbind <group> [DIR]            Remove the binding (default: current directory)
+  list                            Show groups, members and directories (default)
+
+Options:
+  -h, --help                      Show this help
+
+Example:
+  claude-rotate group create client
+  claude-rotate group add client work1 work2
+  claude-rotate group bind client ~/projects/client\
+"""
+
+# (action, usage after "claude-rotate group", description)
+_GROUP_ACTIONS = (
+    ("create", "create <group>", "Create an empty group."),
+    ("delete", "delete <group>", "Delete a group; its accounts become ungrouped."),
+    (
+        "add",
+        "add <group> <account>...",
+        "Add accounts to a group. An account is in at most one group, so it is\n"
+        "moved out of its previous group (reported as 'moved from <old>').",
+    ),
+    ("remove", "remove <group> <account>...", "Take accounts out of a group."),
+    (
+        "bind",
+        "bind <group> [DIR]",
+        "Bind a group to DIR (default: current directory). Only the group's\n"
+        "accounts are used in DIR, and they are used nowhere else. Requires\n"
+        "session isolation; a worktree counts as its repository.",
+    ),
+    ("unbind", "unbind <group> [DIR]", "Remove a directory binding (default: current directory)."),
+    ("list", "list", "Show groups, members and directories."),
+)
 
 _STATUS_DESCRIPTION = """\
 Show the quota dashboard for all configured accounts.\
@@ -504,6 +556,37 @@ def _build_parser() -> argparse.ArgumentParser:
     sp_heartbeat = sub.add_parser("__heartbeat", add_help=True)
     sp_heartbeat.add_argument("event", choices=["active", "end"])
 
+    # group — account groups bound to directories
+    sp_group = sub.add_parser(
+        "group",
+        help="Group accounts and bind groups to directories",
+        usage="claude-rotate group <action> [<args>]",
+        description=_GROUP_DESCRIPTION,
+        epilog=_GROUP_EPILOG,
+        formatter_class=fmt,
+        add_help=False,
+    )
+    sp_group.add_argument("-h", "--help", action="help", help=_SUPPRESS)
+    group_sub = sp_group.add_subparsers(dest="group_action")
+    if sp_group._subparsers is not None:  # keep the {create,delete,...} block out of --help
+        for _action in sp_group._subparsers._group_actions:
+            _action.help = _SUPPRESS
+    for action, usage, description in _GROUP_ACTIONS:
+        sp_action = group_sub.add_parser(
+            action,
+            usage=f"claude-rotate group {usage}",
+            description=description,
+            formatter_class=fmt,
+            add_help=False,
+        )
+        if action != "list":
+            sp_action.add_argument("group", help=_SUPPRESS)
+        if action in ("add", "remove"):
+            sp_action.add_argument("accounts", nargs="+", help=_SUPPRESS)
+        if action in ("bind", "unbind"):
+            sp_action.add_argument("dir", nargs="?", default=None, help=_SUPPRESS)
+        sp_action.add_argument("-h", "--help", action="help", help=_SUPPRESS)
+
     # config — feature toggles in config.json
     sp_config = sub.add_parser(
         "config",
@@ -612,6 +695,10 @@ def main(argv: list[str] | None = None) -> int:
             from claude_rotate.commands import heartbeat
 
             return heartbeat.execute(p, args.event)
+        if args.command == "group":
+            from claude_rotate.commands import group
+
+            return group.execute(p, args)
         if args.command == "config":
             from claude_rotate.commands import config as config_cmd
 

@@ -98,6 +98,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate status --json` | Machine-readable state; each account lists its live Claude Code session IDs in `claude_sessions` |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |
 | `claude-rotate disable <name>` / `enable <name>` | Take an account out of rotation (never auto-picked, still probed + shown greyed-out) / put it back |
+| `claude-rotate group <create\|delete\|add\|remove\|bind\|unbind\|list> …` | Group accounts and bind a group to directories, so a project only uses (and its accounts only run in) its own group — see [Account groups](#account-groups) |
 | `claude-rotate set-expiry <name> <value>` | Override subscription expiry (`YYYY-MM-DD`, `Nd`, or `""`) |
 | `claude-rotate rename <old> <new>` | Rename an account handle |
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
@@ -150,6 +151,33 @@ With it on, each `run` launches `claude` with a per-account `CLAUDE_CONFIG_DIR` 
 In isolation mode the rotator never touches the global `~/.claude/.credentials.json`. *Headless* consumers — CI scripts, agent workers spawning `claude` directly — must pin an account explicitly by setting `CLAUDE_CONFIG_DIR=~/.config/claude-rotate/configs/<account>`; the sync cron keeps every per-account credentials file fresh, so a pinned headless `claude` always boots with a live token. (Earlier versions mirrored the most recently launched account's token into the global file instead. That silently re-pointed *running* headless sessions — which re-read the credentials file every turn — at a different account whenever a new interactive session launched, invalidating their org-scoped prompt cache mid-run and re-billing their full context.)
 
 > **One-time prompt:** the first isolated launch for an account opens Claude Code's workspace-trust dialog (it's a fresh config dir). Pick "Yes, I trust this folder" once per account × project.
+
+## Account groups
+
+Groups keep some accounts for specific projects — say, the subscriptions you bill to one client:
+
+```sh
+claude-rotate group create <group>
+claude-rotate group delete <group>                # members become ungrouped
+claude-rotate group add <group> <account>...      # moves accounts; prints "moved from <old>"
+claude-rotate group remove <group> <account>...   # account becomes ungrouped
+claude-rotate group bind <group> [DIR]            # DIR defaults to the current directory
+claude-rotate group unbind <group> [DIR]          # DIR defaults to the current directory
+claude-rotate group list                          # groups, members, directories
+```
+
+The rules:
+
+- An account is in zero or one group; `group add` moves it out of its previous group.
+- A session **inside a bound directory** (or any directory below it) only uses that group's accounts.
+- A **bound group's accounts run nowhere else**: in every other directory they are skipped.
+- A group **without directories reserves nothing** — its accounts rotate freely, like ungrouped ones. Binding is what reserves them.
+- **The directory beats a pin.** `pin` and `disable` keep working, but only among the allowed accounts; a pinned account outside them is ignored.
+- If the group is exhausted there is **no fallback** to other accounts — you get the usual wait message.
+- **Git worktrees count as their repository**, wherever they live (`<repo>/.claude/worktrees/…` or elsewhere), and symlinked directories are resolved before comparing.
+- **Binding needs [session isolation](#session-isolation-optional).** Without it every running session shares one credentials file, so a launch in a bound directory would switch all other sessions to a reserved account. `group bind` refuses while isolation is off, and `config set session_isolation false` refuses while a group is bound.
+
+`rename` and `remove` keep group membership in step.
 
 ## Why this exists
 
