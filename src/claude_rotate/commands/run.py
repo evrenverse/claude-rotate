@@ -334,7 +334,8 @@ def _print_nothing_allowed_message(group: Group | None) -> None:
     print("", file=sys.stderr)
     if group is not None:
         print(
-            f"  Group {group.name!r} is bound to this directory but has no enabled account.",
+            f"  Group {group.name!r} is bound to this directory but has no enabled account,"
+            "\n  and every other enabled account is reserved for other directories.",
             file=sys.stderr,
         )
         print(

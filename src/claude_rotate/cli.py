@@ -207,8 +207,8 @@ _GROUP_ACTIONS = (
     (
         "bind",
         "bind <group> [DIR]",
-        "Bind a group to DIR (default: current directory). Only the group's\n"
-        "accounts are used in DIR, and they are used nowhere else. Requires\n"
+        "Bind a group to DIR (default: current directory). The group's accounts\n"
+        "then run only in DIR (next to the free accounts there). Requires\n"
         "session isolation; a worktree counts as its repository.",
     ),
     ("unbind", "unbind <group> [DIR]", "Remove a directory binding (default: current directory)."),

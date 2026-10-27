@@ -121,11 +121,12 @@ def has_bound_groups(groups: Mapping[str, Group]) -> bool:
 def allowed_accounts(
     groups: Mapping[str, Group], names: Iterable[str], path: Path
 ) -> frozenset[str]:
-    group = matching_group(groups, path)
-    if group is not None:
-        return frozenset(n for n in names if n in group.accounts)
+    # A bound group reserves its accounts for its own directories; it does not
+    # keep its directories off the free (unreserved) accounts.
     reserved = {a for g in groups.values() if g.dirs for a in g.accounts}
-    return frozenset(n for n in names if n not in reserved)
+    group = matching_group(groups, path)
+    own = group.accounts if group is not None else ()
+    return frozenset(n for n in names if n not in reserved or n in own)
 
 
 def group_of(groups: Mapping[str, Group], account: str) -> str | None:

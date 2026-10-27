@@ -454,13 +454,37 @@ def _bound(tmp_path: Path, *accounts: str) -> dict[str, Group]:
     return {"k": Group("k", accounts, (str(tmp_path.resolve() / "bound"),))}
 
 
-def test_run_in_bound_dir_only_probes_and_picks_group(monkeypatch, tmp_path) -> None:
-    accounts = {"a": _acc("a"), "b": _acc("b")}
+def _two_groups(tmp_path: Path) -> dict[str, Group]:
+    """k reserves a for tmp/bound, o reserves c for tmp/other; b stays free."""
+    root = tmp_path.resolve()
+    return {
+        "k": Group("k", ("a",), (str(root / "bound"),)),
+        "o": Group("o", ("c",), (str(root / "other"),)),
+    }
+
+
+def test_run_in_bound_dir_uses_own_group_and_free_accounts(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b"), "c": _acc("c")}
+    # equal footing: the free b is fresher than the group's own a, so it wins
     _, probe, exec_mock = _grouped_run(
-        monkeypatch, tmp_path, accounts, _bound(tmp_path, "a"), cwd="bound/repo"
+        monkeypatch,
+        tmp_path,
+        accounts,
+        _two_groups(tmp_path),
+        cwd="bound/repo",
+        quota={"a": 50.0, "b": 1.0, "c": 0.0},
     )
-    assert [x.name for x in probe.call_args[0][0]] == ["a"]
-    assert exec_mock.call_args[0][0].name == "a"
+    assert [x.name for x in probe.call_args[0][0]] == ["a", "b"]
+    assert exec_mock.call_args[0][0].name == "b"
+
+
+def test_run_in_bound_dir_falls_back_to_free_when_group_disabled(monkeypatch, tmp_path) -> None:
+    accounts = {"a": replace(_acc("a"), disabled=True), "b": _acc("b"), "c": _acc("c")}
+    rc, _, exec_mock = _grouped_run(
+        monkeypatch, tmp_path, accounts, _two_groups(tmp_path), cwd="bound"
+    )
+    assert rc != 3
+    assert exec_mock.call_args[0][0].name == "b"
 
 
 def test_run_outside_bound_dir_never_picks_reserved(monkeypatch, tmp_path) -> None:
@@ -478,25 +502,25 @@ def test_run_outside_bound_dir_never_picks_reserved(monkeypatch, tmp_path) -> No
     assert exec_mock.call_args[0][0].name == "b"
 
 
-def test_run_pinned_outside_group_is_ignored(monkeypatch, tmp_path) -> None:
-    accounts = {"a": _acc("a"), "b": replace(_acc("b"), pinned=True)}
+def test_run_pinned_account_reserved_elsewhere_is_ignored(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b"), "c": replace(_acc("c"), pinned=True)}
     _, _, exec_mock = _grouped_run(
-        monkeypatch, tmp_path, accounts, _bound(tmp_path, "a"), cwd="bound"
+        monkeypatch, tmp_path, accounts, _two_groups(tmp_path), cwd="bound"
     )
-    assert exec_mock.call_args[0][0].name == "a"
+    assert exec_mock.call_args[0][0].name in {"a", "b"}
 
 
-def test_run_no_probe_data_fallback_stays_in_group(monkeypatch, tmp_path) -> None:
-    accounts = {"a": _acc("a"), "b": replace(_acc("b"), pinned=True)}
+def test_run_no_probe_data_fallback_stays_allowed(monkeypatch, tmp_path) -> None:
+    accounts = {"c": replace(_acc("c"), pinned=True), "a": _acc("a"), "b": _acc("b")}
     _, _, exec_mock = _grouped_run(
         monkeypatch,
         tmp_path,
         accounts,
-        _bound(tmp_path, "a"),
+        _two_groups(tmp_path),
         cwd="bound",
-        quota={"a": None, "b": None},
+        quota={"a": None, "b": None, "c": None},
     )
-    assert exec_mock.call_args[0][0].name == "a"
+    assert exec_mock.call_args[0][0].name in {"a", "b"}
 
 
 def test_run_reload_after_token_refresh_stays_restricted(monkeypatch, tmp_path) -> None:
@@ -515,14 +539,15 @@ def test_run_reload_after_token_refresh_stays_restricted(monkeypatch, tmp_path) 
     assert exec_mock.call_args[0][0].name == "b"
 
 
-def test_run_refuses_when_group_has_no_enabled_account(monkeypatch, tmp_path, capsys) -> None:
-    accounts = {"a": replace(_acc("a"), disabled=True), "b": _acc("b")}
+def test_run_refuses_when_nothing_enabled_may_run_here(monkeypatch, tmp_path, capsys) -> None:
+    # k's only account is disabled and the only other account is reserved by o
+    accounts = {"a": replace(_acc("a"), disabled=True), "c": _acc("c")}
     rc, probe, exec_mock = _grouped_run(
-        monkeypatch, tmp_path, accounts, _bound(tmp_path, "a"), cwd="bound"
+        monkeypatch, tmp_path, accounts, _two_groups(tmp_path), cwd="bound"
     )
     assert rc == 3
     err = capsys.readouterr().err
-    assert "k" in err and "group add" in err
+    assert "'k'" in err and "group add k" in err
     probe.assert_not_called()
     exec_mock.assert_not_called()
 
@@ -573,19 +598,19 @@ def test_run_is_silent_on_success(monkeypatch, tmp_path, capsys) -> None:
     assert capsys.readouterr().err == ""
 
 
-def test_run_prints_wait_line_when_group_exhausted(monkeypatch, tmp_path, capsys) -> None:
-    accounts = {"a": _acc("a"), "b": _acc("b")}
+def test_run_prints_wait_line_when_everything_here_exhausted(monkeypatch, tmp_path, capsys) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b"), "c": _acc("c")}
     _, _, exec_mock = _grouped_run(
         monkeypatch,
         tmp_path,
         accounts,
-        _bound(tmp_path, "a"),
+        _two_groups(tmp_path),
         cwd="bound",
-        quota={"a": 100.0},
+        quota={"a": 100.0, "b": 100.0, "c": 1.0},
     )
     err = capsys.readouterr().err
     assert "⏳" in err and "group k" in err
-    assert exec_mock.call_args[0][0].name == "a"  # no fallback to other accounts
+    assert exec_mock.call_args[0][0].name in {"a", "b"}  # never c, reserved by o
 
 
 def test_run_warns_about_unauthorized_allowed_account(monkeypatch, tmp_path, capsys) -> None:

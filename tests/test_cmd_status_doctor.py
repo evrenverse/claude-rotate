@@ -976,7 +976,8 @@ def _grouped_status(
     unauthorized: tuple[str, ...] = (),
     h5: float = 10.0,
 ):
-    """Two accounts a, b with group k={a} bound to ``tmp_path/bound``; return (paths, bound dir).
+    """Accounts a, b, c: group k={a} bound to ``tmp_path/bound``, group o={c} bound to
+    ``tmp_path/odir``, b free. Return (paths, bound dir).
 
     ``probe_many`` is patched: accounts in ``unauthorized`` fail with a 401, the rest
     probe at ``h5`` percent.
@@ -988,13 +989,14 @@ def _grouped_status(
     monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)
-    Store(p).save({"a": _acc("a"), "b": _acc("b")})
+    Store(p).save({"a": _acc("a"), "b": _acc("b"), "c": _acc("c")})
     bound = (tmp_path / "bound").resolve()
     bound.mkdir()
     (tmp_path / "other").mkdir()
-    save_config(
-        p, RotateConfig(session_isolation=True, groups={"k": Group("k", ("a",), (str(bound),))})
-    )
+    odir = (tmp_path / "odir").resolve()
+    odir.mkdir()
+    groups = {"k": Group("k", ("a",), (str(bound),)), "o": Group("o", ("c",), (str(odir),))}
+    save_config(p, RotateConfig(session_isolation=True, groups=groups))
 
     def probe(accts):
         return [
@@ -1021,9 +1023,10 @@ def test_status_json_dir_marks_allowed_and_chosen(tmp_path, monkeypatch, capsys)
     data = json.loads(capsys.readouterr().out)
     assert data["group"] == "k"
     assert data["dir"] == str(bound.resolve())
-    assert data["chosen"] == "a"
-    assert {x["name"]: x["allowed_here"] for x in data["accounts"]} == {"a": True, "b": False}
-    assert {x["name"]: x["group"] for x in data["accounts"]} == {"a": "k", "b": None}
+    assert data["chosen"] in {"a", "b"}  # own group and free accounts on equal footing
+    allowed = {x["name"]: x["allowed_here"] for x in data["accounts"]}
+    assert allowed == {"a": True, "b": True, "c": False}
+    assert {x["name"]: x["group"] for x in data["accounts"]} == {"a": "k", "b": None, "c": "o"}
 
 
 def test_status_json_elsewhere_excludes_the_bound_group(tmp_path, monkeypatch, capsys) -> None:
@@ -1036,17 +1039,18 @@ def test_status_json_elsewhere_excludes_the_bound_group(tmp_path, monkeypatch, c
     assert data["group"] is None
     assert data["dir"] == str((tmp_path / "other").resolve())
     assert data["chosen"] == "b"
-    assert {x["name"]: x["allowed_here"] for x in data["accounts"]} == {"a": False, "b": True}
+    allowed = {x["name"]: x["allowed_here"] for x in data["accounts"]}
+    assert allowed == {"a": False, "b": True, "c": False}
 
 
 def test_status_exit_code_counts_only_allowed(tmp_path, monkeypatch) -> None:
     from claude_rotate.commands import status
 
-    p, bound = _grouped_status(monkeypatch, tmp_path, unauthorized=("b",))
-    # b needs a re-login but is not allowed in k's directory: a is healthy -> 0.
+    p, bound = _grouped_status(monkeypatch, tmp_path, unauthorized=("c",))
+    # c needs a re-login but is reserved for o's directory: k's directory is healthy -> 0.
     assert status.execute(p, as_json=False, session_dir=bound) == 0
-    # Anywhere else b is the only allowed account -> 2.
-    assert status.execute(p, as_json=False, session_dir=tmp_path / "other") == 2
+    # In o's directory c is allowed -> 2.
+    assert status.execute(p, as_json=False, session_dir=tmp_path / "odir") == 2
 
 
 def test_status_exit_code_2_when_the_allowed_set_is_exhausted(tmp_path, monkeypatch) -> None:
@@ -1065,10 +1069,12 @@ def test_status_exit_code_2_when_the_allowed_accounts_are_all_disabled(
     from claude_rotate.commands import status
 
     p, bound = _grouped_status(monkeypatch, tmp_path)
-    Store(p).save({"a": replace(_acc("a"), disabled=True), "b": _acc("b")})
+    disabled = {n: replace(_acc(n), disabled=True) for n in ("a", "b")}
+    Store(p).save({**disabled, "c": _acc("c")})
+    # k's a and the free b are disabled; c is reserved for o -> nothing usable here.
     assert status.execute(p, as_json=False, session_dir=bound) == 2
-    # Anywhere else the enabled b is allowed and healthy.
-    assert status.execute(p, as_json=False, session_dir=tmp_path / "other") == 0
+    # In o's directory the enabled c is allowed and healthy.
+    assert status.execute(p, as_json=False, session_dir=tmp_path / "odir") == 0
 
 
 def test_status_dir_missing_is_error(tmp_path, monkeypatch, capsys) -> None:
@@ -1114,9 +1120,10 @@ def test_status_dashboard_shows_group_boxes_context_and_isolation_warning(
 
     out = render(collected)
     shown = short_path(bound)  # ~-shortened when the tmp dir lives under $HOME
-    assert f"{shown} · group k · next pick a" in out
+    assert f"{shown} · group k · next pick " in out
     assert f" k · {shown}" in out
-    assert " ungrouped · not allowed here" in out
+    assert " o · " in out and " · not allowed here" in out  # o's box is greyed here
+    assert " ungrouped · not allowed here" not in out  # free accounts may run here
     assert "session isolation" not in out
     assert "Account groups need session isolation" in render(
         replace(collected, isolation_missing=True)

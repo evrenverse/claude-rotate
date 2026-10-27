@@ -11,9 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Account groups bound to directories.** The new `claude-rotate group` command
   (`create`, `delete`, `add`, `remove`, `bind`, `unbind`, `list`) groups accounts
-  and binds a group to directories. A session inside a bound directory (git
-  worktrees of that repo included) only uses the group's accounts, and a bound
-  group's accounts run nowhere else. Binding needs session isolation. `rename`
+  and binds a group to directories. A bound group's accounts run only in its
+  directories (git worktrees of those repos included); sessions there use them
+  alongside the free accounts. Binding needs session isolation. `rename`
   and `remove` keep group membership in step.
 - **`status --dir PATH`** evaluates the dashboard as if launched in `PATH`. `status
   --json` gains top-level `dir` and `group` plus per-account `group` and

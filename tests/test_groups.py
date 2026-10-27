@@ -74,10 +74,13 @@ def test_has_bound_groups(tmp_path: Path) -> None:
     assert has_bound_groups({"g": _g("g", ["a"], [tmp_path])})
 
 
-def test_allowed_accounts_bound_dir_only_group_members(tmp_path: Path) -> None:
-    groups = {"kunde": _g("kunde", ["alpha01", "alpha02"], [tmp_path])}
-    names = ["alpha01", "alpha02", "free"]
-    assert allowed_accounts(groups, names, tmp_path / "repo") == {"alpha01", "alpha02"}
+def test_allowed_accounts_bound_dir_gets_own_group_plus_free(tmp_path: Path) -> None:
+    groups = {
+        "client": _g("client", ["c1", "c2"], [tmp_path / "c"]),
+        "other": _g("other", ["o1"], [tmp_path / "o"]),
+    }
+    names = ["c1", "c2", "o1", "free"]
+    assert allowed_accounts(groups, names, tmp_path / "c" / "repo") == {"c1", "c2", "free"}
 
 
 def test_allowed_accounts_elsewhere_excludes_bound_members(tmp_path: Path) -> None:
@@ -96,7 +99,7 @@ def test_allowed_accounts_account_in_several_groups(tmp_path: Path) -> None:
         "loose": _g("loose", ["b", "c"]),
     }
     assert allowed_accounts(groups, ["a", "b", "c"], tmp_path / "other") == {"c"}
-    assert allowed_accounts(groups, ["a", "b", "c"], tmp_path / "k") == {"a", "b"}
+    assert allowed_accounts(groups, ["a", "b", "c"], tmp_path / "k") == {"a", "b", "c"}
 
 
 def test_matching_group_through_symlink(tmp_path: Path) -> None:

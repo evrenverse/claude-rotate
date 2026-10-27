@@ -31,7 +31,7 @@ The dashboard sorts accounts by subscription expiry (soonest first) and fills yo
 
 Each account renders a **fact line** per window (usage bar, current %, reset clock + countdown). When a window will cross 100% *before* it resets at the current burn rate, a dimmed **ETA sub-line** (`→100%`) shows the clock at which that happens (red under an hour away — see `alt`'s weekly); windows that reset first get no sub-line. Forecasts drop once a window is already at/over 100% (see `alt`'s 5h, where you're at the wall). A footer flags accounts that need action — a re-login or a soon-expiring subscription. Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
 
-This dashboard is what `claude-rotate status` prints. Launching (`claude` / `claude-rotate run`) is silent: it prints to stderr only when every allowed account is exhausted (the wait message), an account needs a re-login, or it refuses to launch (no accounts, an empty group, every account reserved for other directories, session isolation off — exit code 3).
+This dashboard is what `claude-rotate status` prints. Launching (`claude` / `claude-rotate run`) is silent: it prints to stderr only when every allowed account is exhausted (the wait message), an account needs a re-login, or it refuses to launch (no accounts, nothing enabled may run here because the own group is empty and every other account is reserved, session isolation off — exit code 3).
 
 Built for developers and AI agents that burn through a single Max plan before lunch and want to keep working against Claude Code without hitting the 5-hour wall.
 
@@ -90,7 +90,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 
 | Command | What it does |
 |---|---|
-| `claude-rotate run [args…]` | Picks best account, exec `claude` (default when no command given). Silent apart from wait / re-login warnings and the exit-3 refusals (empty group, all accounts reserved, isolation off) |
+| `claude-rotate run [args…]` | Picks best account, exec `claude` (default when no command given). Silent apart from wait / re-login warnings and the exit-3 refusals (nothing enabled may run here, isolation off) |
 | `claude-rotate login <email> [<handle>]` | Add or re-login an account (interactive OAuth PKCE) |
 | `claude-rotate login <email> <handle> --replace` | Overwrite an existing account |
 | `claude-rotate login <email> <handle> --from-env` / `--token-file <path>` | Headless login (no browser) from `CLAUDE_ROTATE_TOKEN` / a token file — grants inference-only scope |
@@ -100,7 +100,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate status --json` | Machine-readable state; each account lists its live Claude Code session IDs in `claude_sessions`, its `group` and whether it is `allowed_here`; the top level adds the resolved `dir` and its `group` |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |
 | `claude-rotate disable <name>` / `enable <name>` | Take an account out of rotation (never auto-picked, still probed + shown greyed-out) / put it back |
-| `claude-rotate group <create\|delete\|add\|remove\|bind\|unbind\|list> …` | Group accounts and bind a group to directories, so a project only uses (and its accounts only run in) its own group — see [Account groups](#account-groups) |
+| `claude-rotate group <create\|delete\|add\|remove\|bind\|unbind\|list> …` | Group accounts and bind a group to directories, so a group's accounts only run in its own directories — see [Account groups](#account-groups) |
 | `claude-rotate set-expiry <name> <value>` | Override subscription expiry (`YYYY-MM-DD`, `Nd`, or `""`) |
 | `claude-rotate rename <old> <new>` | Rename an account handle |
 | `claude-rotate remove <name>` | Delete an account (accepts handle or email) |
@@ -171,11 +171,11 @@ claude-rotate group list                          # groups, members, directories
 The rules:
 
 - An account is in zero or one group; `group add` moves it out of its previous group.
-- A session **inside a bound directory** (or any directory below it) only uses that group's accounts.
-- A **bound group's accounts run nowhere else**: in every other directory they are skipped.
+- A **bound group's accounts run nowhere else**: outside its directories (and the directories below them) they are skipped.
+- A session **inside a bound directory** uses that group's accounts **and** every free account (ungrouped, or in a group without directories), all on equal footing — the usual selection picks among them.
 - A group **without directories reserves nothing** — its accounts rotate freely, like ungrouped ones. Binding is what reserves them.
 - **The directory beats a pin.** `pin` and `disable` keep working, but only among the allowed accounts; a pinned account outside them is ignored.
-- If the group is exhausted there is **no fallback** to other accounts — you get the usual wait message.
+- Accounts reserved by *another* group are never used there. If everything allowed is exhausted you get the usual wait message.
 - **Git worktrees count as their repository**, wherever they live (`<repo>/.claude/worktrees/…` or elsewhere), and symlinked directories are resolved before comparing. The exception: worktrees of a *bare* repository (`git clone --bare` + `git worktree add`) have no main worktree to map to and are not mapped to a group — bind their own directory instead.
 - **Binding needs [session isolation](#session-isolation-optional).** Without it every running session shares one credentials file, so a launch in a bound directory would switch all other sessions to a reserved account. `group bind` refuses while isolation is off, and `config set session_isolation false` refuses while a group is bound. If isolation ends up off anyway (hand-edited config, `CLAUDE_ROTATE_SESSION_ISOLATION=0`), `run` refuses to launch.
 
