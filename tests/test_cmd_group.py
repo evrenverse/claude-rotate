@@ -85,6 +85,15 @@ def test_create_existing_group_fails(p: Paths) -> None:
     assert group_cmd.execute(p, _ns("create", "g")) == 1
 
 
+def test_create_rejects_the_reserved_name_ungrouped(
+    p: Paths, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The dashboard titles the section of group-less accounts ``ungrouped``."""
+    assert group_cmd.execute(p, _ns("create", "ungrouped")) == 1
+    assert "ungrouped" in capsys.readouterr().err
+    assert "ungrouped" not in _groups(p)
+
+
 def test_unknown_group_fails(p: Paths, capsys: pytest.CaptureFixture[str]) -> None:
     for action in ("delete", "add", "remove", "bind", "unbind"):
         assert group_cmd.execute(p, _ns(action, "nope", "a")) == 1

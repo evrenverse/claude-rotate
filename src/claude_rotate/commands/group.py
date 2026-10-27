@@ -53,6 +53,8 @@ def _create(groups: dict[str, Group], name: str) -> str | None:
         validate_account_name(name)
     except AccountError as exc:
         return str(exc)
+    if name == "ungrouped":  # the dashboard's section title for group-less accounts
+        return f"{name!r} is reserved: the dashboard lists accounts without a group under it"
     if name in groups:
         return f"group {name!r} already exists"
     groups[name] = Group(name)
