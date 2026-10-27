@@ -80,9 +80,14 @@ def session_path(path: str | Path) -> Path:
     ``expanduser`` + ``realpath``, then a path inside a linked git worktree maps
     to the same relative path in the repo's main worktree, so a worktree outside
     the repo (``~/.paseo/worktrees/…``) still lands in the repo's group. Any
-    failure (no git, broken repo, unreadable file) yields the plain resolved path.
+    failure (no git, broken repo, unreadable file) yields the plain resolved path;
+    a path that cannot be resolved at all (embedded NUL, deleted cwd) comes back
+    as given, which no stored (absolute) directory can match.
     """
-    p = Path(os.path.realpath(os.path.expanduser(path)))
+    try:
+        p = Path(os.path.realpath(os.path.expanduser(path)))
+    except (OSError, ValueError):
+        return Path(path)
     for root in (p, *p.parents):
         git = root / ".git"
         try:

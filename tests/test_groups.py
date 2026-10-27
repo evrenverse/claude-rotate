@@ -178,6 +178,21 @@ def test_session_path_plain_dir_and_missing_dir(tmp_path: Path) -> None:
     assert session_path(tmp_path / "gone") == (tmp_path / "gone").resolve()  # never raises
 
 
+def test_session_path_null_byte_never_raises() -> None:
+    assert session_path("a\0b") == Path("a\0b")
+    assert session_path("~a\0b") == Path("~a\0b")  # expanduser itself raises here
+
+
+def test_session_path_deleted_cwd_never_raises(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    monkeypatch.chdir(gone)
+    gone.rmdir()  # a relative path now fails in os.getcwd()
+    assert session_path(".") == Path(".")
+
+
 def test_session_path_expands_user(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     assert session_path("~/proj") == (tmp_path / "proj").resolve()
