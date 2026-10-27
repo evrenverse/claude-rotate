@@ -83,6 +83,7 @@ FORECAST_TAIL_WINDOW_7D_SECONDS = 12 * 3600  # look back 12h for the 7d forecast
 FORECAST_TAIL_MIN_SPAN_SECONDS = 300  # min span between the two samples (noise guard)
 USAGE_HISTORY_RETENTION_SECONDS = 12 * 3600  # prune history older than the longest tail
 USAGE_HISTORY_MAX_POINTS = 500  # hard cap on stored samples per account
+USAGE_HISTORY_MIN_INTERVAL_SECONDS = 60  # status --watch saves every probe; keep the 12 h tail
 
 # HTTP
 INFERENCE_URL = "https://api.anthropic.com/v1/messages"

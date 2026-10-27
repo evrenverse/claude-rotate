@@ -14,6 +14,7 @@ from typing import Any
 
 from claude_rotate.config import (
     USAGE_HISTORY_MAX_POINTS,
+    USAGE_HISTORY_MIN_INTERVAL_SECONDS,
     USAGE_HISTORY_RETENTION_SECONDS,
     Paths,
     atomic_write_json,
@@ -196,23 +197,6 @@ class UsageCache:
         self._atomic_write(self._path_for(name), payload)
         self._append_history(name, now, result.h5_pct, result.w7_pct)
 
-    def update_scoped(self, name: str, scoped: tuple[ScopedLimit, ...]) -> None:
-        """Persist freshly fetched scoped limits without a full probe save.
-
-        ``status`` probes fetch scoped limits live but (unlike ``run``) never
-        save the probe result. Successful OAuth fetches are rare under the
-        endpoint's aggressive rate-limiting, so discarding them leaves the
-        backfill stale for hours. This rewrites only ``w7_scoped`` in the
-        existing cache entry (creating a minimal one when absent), leaving
-        ``probed_at`` and the usage history untouched.
-        """
-        if not scoped:
-            return
-        self._paths.usage_dir.mkdir(parents=True, exist_ok=True)
-        raw = self._read_raw(name) or {}
-        raw["w7_scoped"] = _serialize_scoped(scoped, time.time())
-        self._atomic_write(self._path_for(name), raw)
-
     def _atomic_write(self, path: Path, payload: object) -> None:
         # Cache files hold no secrets and churn on every probe: 0o644, compact.
         atomic_write_json(path, payload, mode=0o644, indent=None)
@@ -227,8 +211,15 @@ class UsageCache:
     def _append_history(
         self, name: str, ts: float, h5_pct: float | None, w7_pct: float | None
     ) -> None:
-        """Append one usage sample and prune to the retention window / point cap."""
+        """Append one usage sample and prune to the retention window / point cap.
+
+        A sample less than ``USAGE_HISTORY_MIN_INTERVAL_SECONDS`` after the newest
+        stored one is dropped, so frequent saves cannot fill the cap and evict the tail.
+        """
         history = self._load_history(name)
+        last = history[-1] if history else None
+        if last and last[0] is not None and ts - last[0] < USAGE_HISTORY_MIN_INTERVAL_SECONDS:
+            return
         history.append([ts, h5_pct, w7_pct])
         cutoff = ts - USAGE_HISTORY_RETENTION_SECONDS
         history = [e for e in history if e and e[0] is not None and e[0] >= cutoff]

@@ -334,17 +334,23 @@ def test_sync_credentials_skips_refresh_when_reconcile_is_locked_out(
 
 
 def test_row_from_cache_rejects_entry_without_usage(store_paths: Paths) -> None:
-    """``update_scoped`` writes an entry with no percentages — not a fallback.
+    """A cache entry holding only scoped limits (no percentages) is not a fallback.
 
     Treating it as data would put the account back into the selection pool as
     "usable" with entirely unknown quota.
     """
+    import json
+    import time
+
     from claude_rotate.dashboard import row_from_cache
-    from claude_rotate.selection import ScopedLimit, candidate_from_account
+    from claude_rotate.selection import candidate_from_account
     from claude_rotate.usage_cache import UsageCache
 
     cache = UsageCache(store_paths)
-    cache.update_scoped("work", (ScopedLimit(label="fable", pct=5.0, reset_secs=3600),))
+    store_paths.usage_dir.mkdir(parents=True, exist_ok=True)
+    (store_paths.usage_dir / "work.json").write_text(
+        json.dumps({"w7_scoped": [["fable", 5.0, time.time() + 3600]]})
+    )
 
     candidate = candidate_from_account(
         _account("work"),
