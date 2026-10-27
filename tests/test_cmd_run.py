@@ -463,18 +463,45 @@ def _two_groups(tmp_path: Path) -> dict[str, Group]:
     }
 
 
-def test_run_in_bound_dir_uses_own_group_and_free_accounts(monkeypatch, tmp_path) -> None:
+def test_run_in_bound_dir_prefers_own_group_with_room(monkeypatch, tmp_path) -> None:
     accounts = {"a": _acc("a"), "b": _acc("b"), "c": _acc("c")}
-    # equal footing: the free b is fresher than the group's own a, so it wins
+    # b is fresher, but the group's own a still has room, so a goes first
     _, probe, exec_mock = _grouped_run(
         monkeypatch,
         tmp_path,
         accounts,
         _two_groups(tmp_path),
         cwd="bound/repo",
-        quota={"a": 50.0, "b": 1.0, "c": 0.0},
+        quota={"a": 10.0, "b": 1.0, "c": 0.0},
     )
     assert [x.name for x in probe.call_args[0][0]] == ["a", "b"]
+    assert exec_mock.call_args[0][0].name == "a"
+
+
+def test_run_in_bound_dir_spills_to_free_when_group_nearly_full(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b"), "c": _acc("c")}
+    _, _, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        _two_groups(tmp_path),
+        cwd="bound",
+        quota={"a": 95.0, "b": 50.0, "c": 0.0},
+    )
+    assert exec_mock.call_args[0][0].name == "b"
+
+
+def test_run_no_probe_data_fallback_prefers_own_group(monkeypatch, tmp_path) -> None:
+    # k owns b; the free a sorts first, so only the preference picks b
+    groups = {"k": Group("k", ("b",), (str(tmp_path.resolve() / "bound"),))}
+    _, _, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        {"a": _acc("a"), "b": _acc("b")},
+        groups,
+        cwd="bound",
+        quota={"a": None, "b": None},
+    )
     assert exec_mock.call_args[0][0].name == "b"
 
 

@@ -57,7 +57,13 @@ from claude_rotate.providers import ProviderQuota
 from claude_rotate.providers import cached as cached_providers
 from claude_rotate.providers import collect as collect_providers
 from claude_rotate.report import build_report
-from claude_rotate.selection import candidate_from_account, is_usable, pick_best, selection_pool
+from claude_rotate.selection import (
+    candidate_from_account,
+    is_usable,
+    pick_best,
+    prefer_group,
+    selection_pool,
+)
 from claude_rotate.settings import load_config
 from claude_rotate.sync import read_current_session
 from claude_rotate.usage_cache import UsageCache
@@ -220,7 +226,7 @@ def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collect
 
     chosen = None
     if pool:
-        best, _ = pick_best(pool)
+        best, _ = pick_best(prefer_group(pool, group.accounts if group else ()))
         chosen = best.account.name
 
     session = read_current_session(paths)

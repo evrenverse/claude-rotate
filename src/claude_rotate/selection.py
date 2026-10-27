@@ -184,6 +184,23 @@ def selection_pool(
     return enabled
 
 
+def prefer_group(pool: list[Candidate], group_accounts: Collection[str]) -> list[Candidate]:
+    """Narrow ``pool`` to the directory's own group while one of its accounts has room.
+
+    A bound directory may use its group's accounts and the free ones. The group
+    goes first, but only while at least one of its accounts passes the same
+    capacity gate the expiry tiers use (room for another session in the current
+    5h window, live-session load included). Otherwise the whole pool competes, so
+    a nearly full group spills onto free accounts instead of stalling. Without own
+    accounts in the pool (no group here, or a pin on a free account) the pool is
+    returned unchanged.
+    """
+    own = [c for c in pool if c.account.name in group_accounts]
+    if any(is_usable(c) and _capacity_availability(c) >= CAPACITY_GATE_THRESHOLD for c in own):
+        return own
+    return pool
+
+
 def pick_best(
     candidates: list[Candidate],
     now: datetime | None = None,

@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A bound directory prefers its own group.** Its accounts go first while one of
+  them still has room in the current 5-hour window; a nearly full or busy group lets
+  the free accounts compete, as before.
 - **`status` no longer greys out accounts that are not allowed in the current
   directory.** They keep their colours and carry a `not here` tag instead; greying
   stays reserved for accounts that can't be picked anywhere right now.

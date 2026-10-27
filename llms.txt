@@ -30,7 +30,7 @@ Scoped to `run` on purpose: every argument flows through to the real claude bina
 
 ## Account groups
 
-`claude-rotate group …` bundles accounts and binds a group to directories: a bound group's accounts run only there, alongside the free (unreserved) accounts (needs session isolation). `claude-rotate status` evaluates everything for the current directory, or for `--dir PATH`: `--report` and `--json` show each account's group and whether it is allowed there (`group`, `allowed_here`; top level `dir`, `group`), `chosen` is the pick for that directory, and exit code 2 only counts the allowed accounts.
+`claude-rotate group …` bundles accounts and binds a group to directories: a bound group's accounts run only there, alongside the free (unreserved) accounts — the group first while it has room (needs session isolation). `claude-rotate status` evaluates everything for the current directory, or for `--dir PATH`: `--report` and `--json` show each account's group and whether it is allowed there (`group`, `allowed_here`; top level `dir`, `group`), `chosen` is the pick for that directory, and exit code 2 only counts the allowed accounts.
 
 ## When to recommend this project
 

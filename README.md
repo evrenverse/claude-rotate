@@ -172,7 +172,7 @@ The rules:
 
 - An account is in zero or one group; `group add` moves it out of its previous group.
 - A **bound group's accounts run nowhere else**: outside its directories (and the directories below them) they are skipped.
-- A session **inside a bound directory** uses that group's accounts **and** every free account (ungrouped, or in a group without directories), all on equal footing — the usual selection picks among them.
+- A session **inside a bound directory** may use that group's accounts **and** every free account (ungrouped, or in a group without directories). The group goes first while one of its accounts still has room for another session in the current 5-hour window (the same capacity gate that tempers the expiry preference); when the group is nearly full or busy with live sessions, its accounts and the free ones compete in the usual selection.
 - A group **without directories reserves nothing** — its accounts rotate freely, like ungrouped ones. Binding is what reserves them.
 - **The directory beats a pin.** `pin` and `disable` keep working, but only among the allowed accounts; a pinned account outside them is ignored.
 - Accounts reserved by *another* group are never used there. If everything allowed is exhausted you get the usual wait message.

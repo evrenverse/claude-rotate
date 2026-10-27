@@ -975,12 +975,13 @@ def _grouped_status(
     *,
     unauthorized: tuple[str, ...] = (),
     h5: float = 10.0,
+    quota: dict[str, float] | None = None,
 ):
     """Accounts a, b, c: group k={a} bound to ``tmp_path/bound``, group o={c} bound to
     ``tmp_path/odir``, b free. Return (paths, bound dir).
 
     ``probe_many`` is patched: accounts in ``unauthorized`` fail with a 401, the rest
-    probe at ``h5`` percent.
+    probe at ``quota[name]`` percent, default ``h5``.
     """
     from claude_rotate.groups import Group
     from claude_rotate.selection import Candidate
@@ -1002,8 +1003,8 @@ def _grouped_status(
         return [
             Candidate(
                 account=a,
-                h5_pct=None if a.name in unauthorized else h5,
-                w7_pct=None if a.name in unauthorized else h5,
+                h5_pct=None if a.name in unauthorized else (quota or {}).get(a.name, h5),
+                w7_pct=None if a.name in unauthorized else (quota or {}).get(a.name, h5),
                 h5_reset_secs=3600,
                 w7_reset_secs=86400,
                 probe_error="unauthorized" if a.name in unauthorized else "",
@@ -1018,12 +1019,13 @@ def _grouped_status(
 def test_status_json_dir_marks_allowed_and_chosen(tmp_path, monkeypatch, capsys) -> None:
     from claude_rotate.commands import status
 
-    p, bound = _grouped_status(monkeypatch, tmp_path)
+    # the free b is fresher, but k's own a still has room
+    p, bound = _grouped_status(monkeypatch, tmp_path, quota={"a": 10.0, "b": 1.0})
     status.execute(p, as_json=True, session_dir=bound)
     data = json.loads(capsys.readouterr().out)
     assert data["group"] == "k"
     assert data["dir"] == str(bound.resolve())
-    assert data["chosen"] in {"a", "b"}  # own group and free accounts on equal footing
+    assert data["chosen"] == "a"  # the own group goes first while it has room
     allowed = {x["name"]: x["allowed_here"] for x in data["accounts"]}
     assert allowed == {"a": True, "b": True, "c": False}
     assert {x["name"]: x["group"] for x in data["accounts"]} == {"a": "k", "b": None, "c": "o"}

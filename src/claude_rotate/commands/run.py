@@ -31,7 +31,7 @@ from claude_rotate.groups import (
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import probe_many, probe_result_of
 from claude_rotate.refresh import ensure_fresh
-from claude_rotate.selection import Candidate, is_usable, pick_best, selection_pool
+from claude_rotate.selection import Candidate, is_usable, pick_best, prefer_group, selection_pool
 from claude_rotate.settings import load_config
 from claude_rotate.state_log import StateLog
 from claude_rotate.sync import reconcile_all, refresh_stale_tokens
@@ -209,14 +209,17 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     enabled_resolved = [c for c in resolved if c.account.name not in disabled_names]
 
     group_name = group.name if group else None
+    own = group.accounts if group else ()
 
     if not enabled_resolved:
         # No probe data for any *enabled* account → exec the first enabled
-        # account with its cached token. Prefer a pinned-enabled one. An
-        # enabled allowed account is guaranteed to exist (checked above).
+        # account with its cached token. Prefer a pinned-enabled one, then one of
+        # the directory's own group. An enabled allowed account is guaranteed to
+        # exist (checked above).
+        enabled = [a for a in accounts.values() if not a.disabled]
         first = next(
-            (a for a in accounts.values() if a.pinned and not a.disabled),
-            next(a for a in accounts.values() if not a.disabled),
+            (a for a in enabled if a.pinned),
+            next((a for a in enabled if a.name in own), enabled[0]),
         )
         StateLog(paths).event("exec", chosen=first.name, reason="no_probe_data", group=group_name)
         fresh = _maybe_refresh(first, paths, reconciled=reconciled)
@@ -232,7 +235,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
 
     if not cfg.session_tracking:
         # Tracking disabled → exact pre-feature behaviour.
-        best, wait_msg = pick_best(pool)
+        best, wait_msg = pick_best(prefer_group(pool, own))
         wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
         _print_wait(wait_msg, group)
         StateLog(paths).event(
@@ -259,7 +262,9 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             )
             for c in pool
         ]
-        best, wait_msg = pick_best(loaded_pool)
+        # After the load is stamped: a group account busy with live sessions
+        # fails the capacity gate and lets the free accounts compete.
+        best, wait_msg = pick_best(prefer_group(loaded_pool, own))
         run_uuid = _reserve_record(paths, best.account.name)
         # If exec_claude fails below, this record is orphaned briefly but our
         # own pid dies with the failed run, so the next count_load reaps it.

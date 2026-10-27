@@ -11,6 +11,7 @@ from claude_rotate.selection import (
     next_available_seconds,
     pick_best,
     plan_rank,
+    prefer_group,
     selection_pool,
 )
 
@@ -527,3 +528,35 @@ def test_selection_pool_allowed_none_is_unrestricted() -> None:
     a, b = _named("a"), _named("b")
     pool = selection_pool([a, b], {"a": a.account, "b": b.account}, allowed=None)
     assert [c.account.name for c in pool] == ["a", "b"]
+
+
+def test_prefer_group_narrows_to_own_accounts_with_room() -> None:
+    own, free = _named("own"), _named("free")
+    assert [c.account.name for c in prefer_group([own, free], {"own"})] == ["own"]
+
+
+def test_prefer_group_spills_when_own_accounts_are_nearly_full() -> None:
+    # 5h window at 95 % → below the capacity gate; the free account may compete
+    own = replace(_named("own"), h5_pct=95.0)
+    free = _named("free")
+    assert [c.account.name for c in prefer_group([own, free], {"own"})] == ["own", "free"]
+
+
+def test_prefer_group_spills_when_own_accounts_are_loaded() -> None:
+    # three live sessions already on the account → capacity gate fails
+    own = replace(_named("own"), session_load=3.0)
+    free = _named("free")
+    assert [c.account.name for c in prefer_group([own, free], {"own"})] == ["own", "free"]
+
+
+def test_prefer_group_keeps_one_roomy_own_account_among_full_ones() -> None:
+    full = replace(_named("full"), h5_pct=100.0)
+    roomy, free = _named("roomy"), _named("free")
+    pool = prefer_group([full, roomy, free], {"full", "roomy"})
+    assert [c.account.name for c in pool] == ["full", "roomy"]
+
+
+def test_prefer_group_without_own_accounts_is_unchanged() -> None:
+    a, b = _named("a"), _named("b")
+    assert [c.account.name for c in prefer_group([a, b], ())] == ["a", "b"]
+    assert [c.account.name for c in prefer_group([a, b], {"gone"})] == ["a", "b"]
