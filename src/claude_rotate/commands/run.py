@@ -184,13 +184,15 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     for c in candidates:
         if c.h5_pct is None and c.w7_pct is None:
             err = c.probe_error
-            # Unauthorized → needs a re-login, skip from resolved
+            # Unauthorized → needs a re-login, skip from resolved. A disabled
+            # account can never launch, so its dead token is not worth a warning.
             if err == "unauthorized":
-                print(
-                    f"  ⚠ {c.account.name}: token invalid — run claude-rotate login "
-                    f"{c.account.email or '<email>'} {c.account.name}",
-                    file=sys.stderr,
-                )
+                if c.account.name not in disabled_names:
+                    print(
+                        f"  ⚠ {c.account.name}: token invalid — run claude-rotate login "
+                        f"{c.account.email or '<email>'} {c.account.name}",
+                        file=sys.stderr,
+                    )
                 continue
             # Any other failure (429 without headers, 5xx, network) is a probe
             # failure rather than trustworthy quota data: fall back to cached

@@ -396,6 +396,8 @@ def _grouped_run(
     *,
     cwd: str,
     isolation: bool = True,
+    env_isolation: str | None = None,
+    refreshed: bool = False,
     quota: dict[str, float | None] | None = None,
     probe_errors: dict[str, str] | None = None,
 ) -> tuple[int, MagicMock, MagicMock]:
@@ -403,8 +405,12 @@ def _grouped_run(
 
     ``quota`` maps an account name to its 5h/7d percentage (default 10); ``None``
     makes that probe return no data. ``probe_errors`` overrides the probe error.
+    ``env_isolation`` sets CLAUDE_ROTATE_SESSION_ISOLATION; ``refreshed`` is what
+    ``refresh_stale_tokens`` reports (True makes ``run`` reload accounts.json).
     """
     monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
+    if env_isolation is not None:
+        monkeypatch.setenv("CLAUDE_ROTATE_SESSION_ISOLATION", env_isolation)
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)
     p.state_dir.mkdir(parents=True)
@@ -433,7 +439,7 @@ def _grouped_run(
 
     with (
         patch("claude_rotate.commands.run.refresh_stale_accounts"),
-        patch("claude_rotate.commands.run.refresh_stale_tokens", return_value=False),
+        patch("claude_rotate.commands.run.refresh_stale_tokens", return_value=refreshed),
         patch("claude_rotate.sync.reconcile_isolated"),
         patch("claude_rotate.commands.run.reconcile_all"),
         patch("claude_rotate.commands.run.probe_many", side_effect=probe) as probe_mock,
@@ -493,6 +499,22 @@ def test_run_no_probe_data_fallback_stays_in_group(monkeypatch, tmp_path) -> Non
     assert exec_mock.call_args[0][0].name == "a"
 
 
+def test_run_reload_after_token_refresh_stays_restricted(monkeypatch, tmp_path) -> None:
+    """accounts.json is re-read after a refresh; the reload must not widen the pool again."""
+    accounts = {"a": replace(_acc("a"), pinned=True), "b": _acc("b")}  # a: reserved and pinned
+    _, probe, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        _bound(tmp_path, "a"),
+        cwd="elsewhere",
+        refreshed=True,
+        quota={"a": None, "b": None},  # no probe data: the fallback picks a pinned account
+    )
+    assert [x.name for x in probe.call_args[0][0]] == ["b"]
+    assert exec_mock.call_args[0][0].name == "b"
+
+
 def test_run_refuses_when_group_has_no_enabled_account(monkeypatch, tmp_path, capsys) -> None:
     accounts = {"a": replace(_acc("a"), disabled=True), "b": _acc("b")}
     rc, probe, exec_mock = _grouped_run(
@@ -530,6 +552,22 @@ def test_run_refuses_bound_groups_without_isolation(monkeypatch, tmp_path, capsy
     exec_mock.assert_not_called()
 
 
+def test_run_env_override_turns_isolation_off_and_refuses(monkeypatch, tmp_path, capsys) -> None:
+    rc, probe, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        {"a": _acc("a")},
+        _bound(tmp_path, "a"),
+        cwd="bound",
+        isolation=True,  # the config says on ...
+        env_isolation="0",  # ... the environment wins
+    )
+    assert rc == 3
+    assert "session_isolation" in capsys.readouterr().err
+    probe.assert_not_called()
+    exec_mock.assert_not_called()
+
+
 def test_run_is_silent_on_success(monkeypatch, tmp_path, capsys) -> None:
     _grouped_run(monkeypatch, tmp_path, {"a": _acc("a"), "b": _acc("b")}, {}, cwd="anywhere")
     assert capsys.readouterr().err == ""
@@ -563,3 +601,20 @@ def test_run_warns_about_unauthorized_allowed_account(monkeypatch, tmp_path, cap
     )
     err = capsys.readouterr().err
     assert "a: token invalid" in err and "claude-rotate login a@example.com a" in err
+
+
+def test_run_does_not_warn_about_a_disabled_unauthorized_account(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    accounts = {"a": replace(_acc("a"), email="a@example.com", disabled=True), "b": _acc("b")}
+    _, _, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        {},
+        cwd="anywhere",
+        quota={"a": None},
+        probe_errors={"a": "unauthorized"},
+    )
+    assert "⚠" not in capsys.readouterr().err  # a can never launch, so nothing to fix
+    assert exec_mock.call_args[0][0].name == "b"
