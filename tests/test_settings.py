@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from claude_rotate.config import paths
+from claude_rotate.errors import ConfigError
+from claude_rotate.groups import Group
 from claude_rotate.settings import RotateConfig, load_config, save_config, set_value
 
 
@@ -109,3 +113,56 @@ def test_setting_other_key_preserves_session_tracking(tmp_path: Path) -> None:
     cfg = load_config(p)
     assert cfg.session_tracking is False
     assert cfg.session_isolation is True
+
+
+def test_groups_round_trip(rotate_dir: Path) -> None:
+    p = paths()
+    cfg = replace(RotateConfig(), groups={"k": Group("k", ("a",), ("/x",))})
+    save_config(p, cfg)
+    assert load_config(p).groups == cfg.groups
+
+
+def test_set_value_keeps_groups(rotate_dir: Path) -> None:
+    p = paths()
+    save_config(p, replace(RotateConfig(), groups={"k": Group("k", ("a",), ())}))
+    set_value(p, "auto_resume.enabled", "true")
+    assert "k" in load_config(p).groups
+
+
+def test_set_value_does_not_persist_env_isolation(
+    rotate_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = paths()
+    save_config(p, RotateConfig(session_isolation=False))
+    monkeypatch.setenv("CLAUDE_ROTATE_SESSION_ISOLATION", "1")
+    set_value(p, "auto_resume.enabled", "true")
+    assert json.loads(p.config_file.read_text())["session_isolation"] is False
+
+
+def test_load_config_apply_env_false_ignores_env(
+    rotate_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = paths()
+    save_config(p, RotateConfig(session_isolation=False))
+    monkeypatch.setenv("CLAUDE_ROTATE_SESSION_ISOLATION", "1")
+    assert load_config(p).session_isolation is True
+    assert load_config(p, apply_env=False).session_isolation is False
+
+
+def test_isolation_cannot_be_disabled_while_groups_bound(rotate_dir: Path) -> None:
+    p = paths()
+    save_config(
+        p,
+        replace(
+            RotateConfig(session_isolation=True),
+            groups={"kappa": Group("kappa", ("a",), ("/x",))},
+        ),
+    )
+    with pytest.raises(ConfigError, match="kappa"):
+        set_value(p, "session_isolation", "false")
+    assert load_config(p).session_isolation is True
+
+
+def test_no_groups_key_written_when_empty(rotate_dir: Path) -> None:
+    save_config(paths(), RotateConfig())
+    assert "groups" not in json.loads(paths().config_file.read_text())

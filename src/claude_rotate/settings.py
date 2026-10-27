@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 
 from claude_rotate.config import Paths, atomic_write_json
 from claude_rotate.errors import ConfigError
+from claude_rotate.groups import Group, dump_groups, has_bound_groups, parse_groups
 
 DEFAULT_RESUME_MESSAGE = "weiter gehts"
 
@@ -29,9 +31,10 @@ class RotateConfig:
     auto_resume_enabled: bool = False
     auto_resume_message: str = DEFAULT_RESUME_MESSAGE
     session_tracking: bool = True
+    groups: Mapping[str, Group] = field(default_factory=dict)
 
 
-def load_config(paths: Paths) -> RotateConfig:
+def load_config(paths: Paths, *, apply_env: bool = True) -> RotateConfig:
     path = paths.config_file
     if not path.exists():
         return RotateConfig()
@@ -45,7 +48,7 @@ def load_config(paths: Paths) -> RotateConfig:
     if not isinstance(resume, dict):
         resume = {}
     isolation = bool(raw.get("session_isolation", False))
-    env = os.environ.get("CLAUDE_ROTATE_SESSION_ISOLATION")
+    env = os.environ.get("CLAUDE_ROTATE_SESSION_ISOLATION") if apply_env else None
     if env is not None and env.strip() != "":
         isolation = env.strip().lower() in _TRUTHY
     session_tracking = bool(raw.get("session_tracking", True))
@@ -54,6 +57,7 @@ def load_config(paths: Paths) -> RotateConfig:
         auto_resume_enabled=bool(resume.get("enabled", False)),
         auto_resume_message=str(resume.get("message", DEFAULT_RESUME_MESSAGE)),
         session_tracking=session_tracking,
+        groups=parse_groups(raw.get("groups")),
     )
 
 
@@ -65,17 +69,17 @@ def save_config(paths: Paths, cfg: RotateConfig) -> None:
     path = paths.config_file
     path.parent.mkdir(parents=True, exist_ok=True)
     path.parent.chmod(0o700)
-    atomic_write_json(
-        path,
-        {
-            "session_isolation": cfg.session_isolation,
-            "auto_resume": {
-                "enabled": cfg.auto_resume_enabled,
-                "message": cfg.auto_resume_message,
-            },
-            "session_tracking": cfg.session_tracking,
+    data: dict[str, object] = {
+        "session_isolation": cfg.session_isolation,
+        "auto_resume": {
+            "enabled": cfg.auto_resume_enabled,
+            "message": cfg.auto_resume_message,
         },
-    )
+        "session_tracking": cfg.session_tracking,
+    }
+    if cfg.groups:
+        data["groups"] = dump_groups(cfg.groups)
+    atomic_write_json(path, data)
 
 
 def _coerce_bool(value: str) -> bool:
@@ -88,9 +92,16 @@ def _coerce_bool(value: str) -> bool:
 
 
 def set_value(paths: Paths, key: str, value: str) -> RotateConfig:
-    cfg = load_config(paths)
+    cfg = load_config(paths, apply_env=False)  # never persist the env override
     if key == "session_isolation":
-        cfg = replace(cfg, session_isolation=_coerce_bool(value))
+        isolation = _coerce_bool(value)
+        if not isolation and has_bound_groups(cfg.groups):
+            bound = ", ".join(sorted(n for n, g in cfg.groups.items() if g.dirs))
+            raise ConfigError(
+                f"session_isolation cannot be disabled while groups are bound to directories "
+                f"({bound}); unbind them first"
+            )
+        cfg = replace(cfg, session_isolation=isolation)
     elif key == "auto_resume.enabled":
         cfg = replace(cfg, auto_resume_enabled=_coerce_bool(value))
     elif key == "auto_resume.message":
