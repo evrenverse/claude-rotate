@@ -40,7 +40,7 @@ from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
 )
-from claude_rotate.dashboard import DashboardRow, session_indicator
+from claude_rotate.dashboard import DashboardRow, session_indicator, visible_scoped
 from claude_rotate.insights import (
     clock_at,
     compute_forecast,
@@ -107,7 +107,9 @@ def _render_cards(
     """
     # Scoped labels (e.g. "fable") can be wider than "week"; share one width
     # across all cards so every fact line's bar column stays aligned.
-    label_width = max([len("week"), *(len(s.label) for row in ordered for s in row.w7_scoped)])
+    label_width = max(
+        [len("week"), *(len(s.label) for row in ordered for s in visible_scoped(row.w7_scoped))]
+    )
     # A label-less sub-line is indented to the fact line's pct column: blank label
     # + blank bar, with the fact line's two-space gaps.
     sub_prefix = f"{'':<{label_width}}  {' ' * _BAR_WIDTH}  "
@@ -160,7 +162,7 @@ def _render_cards(
                     None,
                     row.from_cache or s.stale,
                 )
-                for s in row.w7_scoped
+                for s in visible_scoped(row.w7_scoped)
             ),
         )
 

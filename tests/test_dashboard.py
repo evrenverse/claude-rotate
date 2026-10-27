@@ -1380,3 +1380,164 @@ class TestFoldedProviderCardsShareOneGrid:
         five_hour, week = self._card_lines()
 
         assert five_hour.index(":") == week.index(":")
+
+
+# ---------------------------------------------------------------------------
+# Group sections, full-width layout, hidden ~0 % scoped lines
+# ---------------------------------------------------------------------------
+
+_FIXED_NOW = datetime(2026, 4, 22, 9, 0, tzinfo=UTC)
+
+
+def _plain_console(width: int) -> Console:
+    return Console(file=StringIO(), width=width, force_terminal=False, color_system=None)
+
+
+def test_build_sections_order_and_titles(tmp_path) -> None:
+    from dataclasses import replace
+
+    from claude_rotate.dashboard import build_sections
+    from claude_rotate.groups import Group
+
+    rows = [
+        replace(_row(_acc("a")), group="k"),
+        replace(_row(_acc("b")), allowed=False),
+        replace(_row(_acc("c")), group="z", allowed=False),
+    ]
+    groups = {
+        "k": Group("k", accounts=("a",), dirs=(str(tmp_path / "p"),)),
+        "z": Group("z", accounts=("c",)),
+    }
+    sections = build_sections(rows, groups, "k", home=tmp_path)
+    assert [s.title for s in sections] == [
+        "k · ~/p",
+        "z · not allowed here",
+        "ungrouped · not allowed here",
+    ]
+    assert [[r.account.name for r in s.rows] for s in sections] == [["a"], ["c"], ["b"]]
+
+
+def test_build_sections_without_groups_is_single_untitled() -> None:
+    from claude_rotate.dashboard import build_sections
+
+    rows = [_row(_acc("late", sub_days=20)), _row(_acc("soon", sub_days=3))]
+    sections = build_sections(rows, {}, None)
+    assert len(sections) == 1
+    assert sections[0].title is None
+    assert [r.account.name for r in sections[0].rows] == ["soon", "late"]  # by expiry
+
+
+def test_sections_share_column_widths(tmp_path) -> None:
+    from dataclasses import replace
+
+    from claude_rotate.dashboard import build_sections
+    from claude_rotate.groups import Group
+
+    rows = [
+        replace(_row(_acc("a"), h5_pct=5.0), group="k"),
+        replace(_scoped_row("a-much-longer-account-name"), allowed=False),
+    ]
+    groups = {"k": Group("k", accounts=("a",), dirs=(str(tmp_path),))}
+    console = _plain_console(160)
+    render_dashboard(
+        rows,
+        chosen="a",
+        console=console,
+        now=_FIXED_NOW,
+        sections=build_sections(rows, groups, "k", home=tmp_path),
+    )
+    out = console.file.getvalue()
+    assert out.count("╭") == 2  # one box per section
+    assert sum(1 for ln in out.splitlines() if "5h" in ln and "week" in ln) == 1  # one header
+    lines = _table_lines(out)
+    rules = {tuple(i for i, ch in enumerate(ln) if ch == "│") for ln in lines if ln[0] == "│"}
+    assert len(rules) == 1, rules
+    assert len({len(ln) for ln in lines}) == 1  # borders line up too
+
+
+def test_table_fills_terminal_width() -> None:
+    console = _plain_console(220)
+    render_dashboard([_row(_acc("main"))], chosen="main", console=console, now=_FIXED_NOW)
+    assert max(len(ln) for ln in console.file.getvalue().splitlines()) >= 210
+
+
+def test_cards_fill_terminal_width() -> None:
+    # A long name pushes the table past 90 columns, so the cards layout draws.
+    name = "an-account-name-long-enough-to-force-cards"
+    console = _plain_console(90)
+    render_dashboard([_row(_acc(name))], chosen=name, console=console, now=_FIXED_NOW)
+    out = console.file.getvalue()
+    assert f"{name} · Max-20" in out  # cards header, not the table
+    assert max(len(ln) for ln in out.splitlines()) >= 85
+
+
+def test_zero_scoped_hidden_nonzero_kept() -> None:
+    from dataclasses import replace
+
+    from claude_rotate.selection import ScopedLimit
+
+    for pct, shown in ((0.2, False), (35.0, True)):
+        row = replace(
+            _scoped_row(), w7_scoped=(ScopedLimit(label="fable", pct=pct, reset_secs=86400),)
+        )
+        for width in (140, 60):  # table and cards
+            console = _plain_console(width)
+            render_dashboard([row], chosen="main", console=console, now=_FIXED_NOW)
+            assert ("fable" in console.file.getvalue()) is shown, (pct, width)
+
+
+def test_status_json_keeps_zero_scoped() -> None:
+    from dataclasses import replace
+
+    from claude_rotate.selection import ScopedLimit
+
+    row = replace(_scoped_row(), w7_scoped=(ScopedLimit(label="fable", pct=0.2, reset_secs=60),))
+    assert status_json([row], chosen="main")["accounts"][0]["w7_scoped"][0]["pct"] == 0.2
+
+
+def test_not_allowed_rows_are_greyed() -> None:
+    from dataclasses import replace
+
+    rows = [replace(_row(_acc("blocked")), allowed=False), _row(_acc("fresh"))]
+    console = Console(file=StringIO(), force_terminal=True, color_system="truecolor", width=120)
+    render_dashboard(rows, chosen="fresh", console=console, now=_FIXED_NOW)
+    lines = [ln for ln in console.file.getvalue().splitlines() if "│" in ln]
+    blocked = next(ln for ln in lines if "blocked" in ln)
+    fresh = next(ln for ln in lines if "fresh" in ln)
+    assert "38;2;" not in blocked  # gradient colours stripped
+    assert "38;5;240" in blocked  # grey35 applied
+    assert "38;2;" in fresh
+
+
+def test_long_status_note_wraps_instead_of_truncating() -> None:
+    rows = [
+        _row(_acc("main")),
+        _row(
+            _acc("dead"),
+            h5_pct=None,
+            w7_pct=None,
+            status="relogin",
+            note="probe failed (token may be expired)",
+        ),
+    ]
+    console = _plain_console(90)
+    render_dashboard(rows, chosen="main", console=console, now=_FIXED_NOW)
+    out = console.file.getvalue()
+    assert "…" not in out
+    assert any("expired)" in ln for ln in _table_lines(out))  # inside the box, not the footer
+
+
+def test_render_dashboard_prints_context_and_cache_note() -> None:
+    console = _plain_console(120)
+    render_dashboard(
+        [_row(_acc("main"))],
+        chosen="main",
+        console=console,
+        now=_FIXED_NOW,
+        context="~/p · group k · next pick main",
+        cache_note="cached 3m ago",
+    )
+    lines = console.file.getvalue().splitlines()
+    status = next(i for i, ln in enumerate(lines) if "(>)" in ln)
+    assert lines[status].endswith(" · cached 3m ago")
+    assert lines[status + 1] == "~/p · group k · next pick main"

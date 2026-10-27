@@ -31,6 +31,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "no usable account") only count the accounts allowed in the current directory;
   without groups that is every account, so nothing changes. `status` also saves its
   live probes to the usage cache now, like `run` does.
+- **Dashboard layout.** With groups, `status` draws one box per group (current
+  directory's group first, `ungrouped` last) under a title line with the group's
+  directories. Boxes share column widths, and accounts not allowed here are greyed out.
+  A context line shows the directory, its group and the next pick, and a warning
+  appears when bound groups lack session isolation. The table and the narrow cards now
+  fill the terminal width instead of capping the bars. Model-scoped limits (e.g.
+  `fable`) are hidden while at ~0 % (`--json` still lists them).
 
 ## [0.8.1] - 2026-10-23
 

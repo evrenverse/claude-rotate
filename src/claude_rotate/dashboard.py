@@ -1,6 +1,6 @@
 """Status dashboard rendering with rich.
 
-``render_dashboard`` is responsive: gradient bars grow with the terminal,
+``render_dashboard`` is responsive: gradient bars fill the terminal width,
 relative durations are dropped first when space gets tight, and below
 ``_CARDS_MAX_WIDTH`` the four columns fold into a single-column bordered table
 — one ruled, framed card per account, with the header and both windows stacked
@@ -12,7 +12,9 @@ uniform grey (``is_unusable`` + ``_greyed``) so the eye skips them. Each window
 rendered as a dim-labelled line beneath week) renders a *fact line* (bar,
 usage %, reset clock + relative duration) and, when the limit is crossed
 before reset, a dimmed *ETA sub-line* (``→100%`` plus the clock at which usage
-hits the wall).
+hits the wall). Scoped windows still at ~0 % are hidden (``visible_scoped``).
+With account groups, ``build_sections`` splits the accounts into one box per
+group; all boxes share one column grid so they line up.
 Shared quota semantics (forecasts, warnings, wording) live in
 ``claude_rotate.insights`` and are reused by the ``--report`` renderer.
 """
@@ -20,12 +22,15 @@ Shared quota semantics (forecasts, warnings, wording) live in
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from itertools import islice
+from pathlib import Path
 from typing import Any, Protocol
 
 from rich import box
-from rich.console import Console
+from rich.console import Console, JustifyMethod
 from rich.measure import Measurement
 from rich.table import Table
 from rich.text import Text
@@ -40,6 +45,7 @@ from claude_rotate.config import (
     HEADROOM_PERCENT,
     STALE_METADATA_WARN_DAYS,
 )
+from claude_rotate.groups import Group
 from claude_rotate.insights import (
     clock_at,
     compute_forecast,
@@ -56,7 +62,9 @@ from claude_rotate.sessions import SessionLoad
 
 __all__ = [
     "DashboardRow",
+    "Section",
     "attach_forecast_rates",
+    "build_sections",
     "fmt_sub_expiry",
     "forecast_enabled",
     "gradient_bar",
@@ -65,7 +73,9 @@ __all__ = [
     "render_providers",
     "render_stale_footer",
     "session_indicator",
+    "short_path",
     "status_json",
+    "visible_scoped",
 ]
 
 _FILLED = "█"
@@ -146,6 +156,58 @@ class DashboardRow:
     # account; a not-allowed row is shown but never part of the pick or exit code.
     group: str | None = None
     allowed: bool = True
+
+
+@dataclass(frozen=True)
+class Section:
+    """One box of the dashboard; ``title`` is ``None`` when there are no groups."""
+
+    title: str | None
+    rows: list[DashboardRow]
+
+
+def short_path(path: str | Path, home: Path | None = None) -> str:
+    """``path`` with the home directory shortened to ``~``."""
+    home = home or Path.home()
+    try:
+        rel = Path(path).relative_to(home)
+    except ValueError:
+        return str(path)
+    return "~" if rel == Path() else f"~/{rel}"
+
+
+def build_sections(
+    rows: list[DashboardRow],
+    groups: Mapping[str, Group],
+    current: str | None,
+    home: Path | None = None,
+) -> list[Section]:
+    """One section per group: ``current`` first, the rest by name, ``ungrouped`` last."""
+    if not groups:
+        return [Section(None, _by_expiry(rows))]
+    order: list[str | None] = [current] if current in groups else []
+    order += [n for n in sorted(groups) if n != current]
+    order.append(None)
+    sections: list[Section] = []
+    for name in order:
+        # A row naming a group that no longer exists counts as ungrouped, never dropped.
+        members = [r for r in rows if (r.group if r.group in groups else None) == name]
+        if not members:
+            continue
+        if name is None:
+            title = "ungrouped"
+        else:
+            dirs = ", ".join(short_path(d, home) for d in groups[name].dirs)
+            title = f"{name} · {dirs}" if dirs else name
+        if not any(r.allowed for r in members):
+            title += " · not allowed here"
+        sections.append(Section(title, _by_expiry(members)))
+    return sections
+
+
+def visible_scoped(scoped: tuple[ScopedLimit, ...]) -> tuple[ScopedLimit, ...]:
+    """Scoped limits worth a line: hidden while their usage rounds to 0 %."""
+    return tuple(s for s in scoped if s.pct >= 0.5)
 
 
 class _RateSource(Protocol):
@@ -353,9 +415,8 @@ def session_indicator(load: SessionLoad | None) -> str:
 # ---------------------------------------------------------------------------
 
 _BAR_MIN = 8
-_BAR_MAX = 20
 _CARDS_MAX_WIDTH = 76  # below this terminal width, fold the table into cards
-_CARD_BAR_WIDTH = 10
+_CARD_BAR_WIDTH = 10  # floor; card bars otherwise fill the width
 _ETA_URGENT_SECS = 3600  # limit-ETA under an hour renders red, not dim
 _ETA_MARK = "→100%"  # sub-line marker: "hits 100% at <clock>"
 
@@ -512,8 +573,10 @@ def _week_and_scoped_cells(
     Built in one batch so the week line and the scoped lines beneath it share
     the column's weekday slot and column grid. Scoped windows have no
     burn-rate history, so their forecast falls back to the average-pace
-    projection (rate=None) — same as the ``--report`` renderer.
+    projection (rate=None) — same as the ``--report`` renderer. Limits still at
+    ~0 % are left out (``visible_scoped``).
     """
+    shown = [visible_scoped(r.w7_scoped) for r in rows]
     scoped_datas: list[_WindowData] = [
         (
             s.pct if r.status == "ok" else None,
@@ -524,8 +587,8 @@ def _week_and_scoped_cells(
             expiry_horizon(r.account.effective_expires_at, s.reset_secs, now_local),
             None,
         )
-        for r in rows
-        for s in r.w7_scoped
+        for r, scoped in zip(rows, shown, strict=True)
+        for s in scoped
     ]
     cells = _cells_from_datas(
         _window_datas(rows, "week", now_local=now_local) + scoped_datas,
@@ -534,8 +597,8 @@ def _week_and_scoped_cells(
         show_forecast=show_forecast,
     )
     it = iter(cells[len(rows) :])
-    scoped = [[(s.label, next(it)) for s in r.w7_scoped] for r in rows]
-    return cells[: len(rows)], scoped
+    scoped_cells = [[(s.label, next(it)) for s in scoped] for scoped in shown]
+    return cells[: len(rows)], scoped_cells
 
 
 def _col_widths(cells: list[_WindowCell], *, include_rel: bool) -> tuple[int, int, int]:
@@ -675,15 +738,42 @@ def _sub_text(row: DashboardRow, *, now: datetime) -> Text:
 
 def _status_text(row: DashboardRow) -> Text:
     label, style = _STATUS_LABELS[row.status]
-    t = Text()
+    # Wraps inside the table's fixed-width week column instead of being truncated.
+    t = Text(no_wrap=False)
     t.append(label, style=style)
     if row.note:
         t.append(f"  {row.note}", style="dim")
     return t
 
 
+def _text_w(cells: list[_WindowCell], pw: int, cw: int, rw: int) -> int:
+    """Width of a window line without its bar (and without a scoped label)."""
+    # A clock capped at the subscription expiry trails " ⌛" (3 cells).
+    capped = 3 if cw and any(c.capped for c in cells) else 0
+    return 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0) + capped
+
+
+def _section_title(title: str) -> Text:
+    """Title line above a section's box: bold group name, dim rest."""
+    name, sep, rest = title.partition(" · ")
+    t = Text(" ")
+    t.append(name, style="bold")
+    t.append(sep + rest, style="dim")
+    return t
+
+
+def _print_sections(console: Console, sections: list[Section], tables: list[Table]) -> int:
+    """Print each box under its title; returns the (shared) width drawn."""
+    console.print()
+    for section, table in zip(sections, tables, strict=True):
+        if section.title:
+            console.print(_section_title(section.title))
+        console.print(table)
+    return _drawn_width(console, tables[-1])
+
+
 def _render_table(
-    rows: list[DashboardRow],
+    sections: list[Section],
     *,
     console: Console,
     chosen: str | None,
@@ -692,11 +782,13 @@ def _render_table(
     now_local: datetime,
     show_forecast: bool,
 ) -> int | None:
-    """Render the wide table; ``None`` when even the rel-less layout is too wide.
+    """Render one wide table per section; ``None`` when even the rel-less layout is too wide.
 
-    The return value is the width actually drawn, so the provider table below
-    can line up with it exactly.
+    Column widths come from every row and are set on every table, so the boxes
+    line up; the bars take all the width that is left. The return value is the
+    width actually drawn, so the provider table below can line up with it exactly.
     """
+    rows = [r for s in sections for r in s.rows]
     cells5 = _window_cells(
         rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
@@ -712,57 +804,58 @@ def _render_table(
     for include_rel in (True, False):
         pw5, cw5, rw5 = _col_widths(cells5, include_rel=include_rel)
         pw7, cw7, rw7 = _col_widths(cells7 + flat_scoped, include_rel=include_rel)
-
-        def text_w(pw: int, cw: int, rw: int) -> int:
-            return 2 + pw + ((2 + cw) if cw else 0) + ((1 + rw) if rw else 0)
-
+        w5 = _text_w(cells5, pw5, cw5, rw5)
+        w7 = label7_w + _text_w(cells7 + flat_scoped, pw7, cw7, rw7)
         # Bordered-table chrome: 5 vertical rules + 4 columns x 2 padding cells.
         chrome = 5 + 4 * 2
-        overhead = (
-            label_w + sub_w + chrome + text_w(pw5, cw5, rw5) + text_w(pw7, cw7, rw7) + label7_w
-        )
-        slack = (console.width - overhead) // 2
-        if slack < _BAR_MIN:
+        bar_w = (console.width - label_w - sub_w - chrome - w5 - w7) // 2
+        if bar_w < _BAR_MIN:
             continue
-        bar_w = min(slack, _BAR_MAX)
 
-        table = Table(
-            box=box.ROUNDED,
-            show_lines=True,  # rule between accounts — each row reads as its own band
-            padding=(0, 1),
-            border_style="dim",
-            header_style="bold",
+        columns: tuple[tuple[str, int, JustifyMethod], ...] = (
+            ("", label_w, "left"),
+            ("5h", w5 + bar_w, "left"),
+            ("week", w7 + bar_w, "left"),
+            ("sub", sub_w, "right"),
         )
-        table.add_column("", no_wrap=True)
-        table.add_column("5h", no_wrap=True)
-        table.add_column("week", no_wrap=True)
-        table.add_column("sub", no_wrap=True, justify="right")
-        for row, lbl, c5, c7, sc7, sub in zip(
-            rows, labels, cells5, cells7, scoped7, subs, strict=True
-        ):
-            unusable = is_unusable(row, now=now)
-            if row.status in _STATUS_LABELS:
-                # The status label stays loud even when the row is greyed out —
-                # it asks for action.
-                table.add_row(
-                    _greyed(lbl) if unusable else lbl,
-                    Text("N/A", style="grey50"),
-                    _status_text(row),
-                    _greyed(sub) if unusable else sub,
-                )
-                continue
-            t5 = _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5)
-            # Blank prefix keeps the week bar aligned with labelled scoped bars.
-            t7 = _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7, label=" " * label7_w)
-            if c7.pct is not None:
-                _append_scoped_lines(t7, sc7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7, label_w=label7_w)
-            if unusable:
-                table.add_row(_greyed(lbl), _greyed(t5), _greyed(t7), _greyed(sub))
-            else:
-                table.add_row(lbl, t5, t7, sub)
-        console.print()
-        console.print(table)
-        return _drawn_width(console, table)
+        it = iter(zip(rows, labels, cells5, cells7, scoped7, subs, strict=True))
+        tables: list[Table] = []
+        for i, section in enumerate(sections):
+            table = Table(
+                box=box.ROUNDED,
+                show_lines=True,  # rule between accounts — each row reads as its own band
+                show_header=i == 0,
+                padding=(0, 1),
+                border_style="dim",
+                header_style="bold",
+            )
+            for header, width, justify in columns:
+                table.add_column(header, no_wrap=True, width=width, justify=justify)
+            for row, lbl, c5, c7, sc7, sub in islice(it, len(section.rows)):
+                greyed = is_unusable(row, now=now) or not row.allowed
+                if row.status in _STATUS_LABELS:
+                    # The status label stays loud even when the row is greyed out —
+                    # it asks for action.
+                    table.add_row(
+                        _greyed(lbl) if greyed else lbl,
+                        Text("N/A", style="grey50"),
+                        _status_text(row),
+                        _greyed(sub) if greyed else sub,
+                    )
+                    continue
+                t5 = _window_text(c5, bar_w=bar_w, pw=pw5, cw=cw5, rw=rw5)
+                # Blank prefix keeps the week bar aligned with labelled scoped bars.
+                t7 = _window_text(c7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7, label=" " * label7_w)
+                if c7.pct is not None:
+                    _append_scoped_lines(
+                        t7, sc7, bar_w=bar_w, pw=pw7, cw=cw7, rw=rw7, label_w=label7_w
+                    )
+                if greyed:
+                    table.add_row(_greyed(lbl), _greyed(t5), _greyed(t7), _greyed(sub))
+                else:
+                    table.add_row(lbl, t5, t7, sub)
+            tables.append(table)
+        return _print_sections(console, sections, tables)
     return None
 
 
@@ -775,14 +868,16 @@ def _card_text(
     chosen: str | None,
     active: str | None,
     now: datetime,
+    width: int,
     unusable: bool,
 ) -> Text:
     """One account's card body — header line plus stacked window lines.
 
     Returned as a single (multi-line) ``Text`` so it drops into one cell of the
-    compact bordered table. Greying mirrors the wide table: an unusable account
-    flattens header and window lines to grey, but a loud error-status label
-    stays coloured because it asks for action.
+    compact bordered table. The bars stretch so the widest window line fills
+    ``width`` (the card's inner width). Greying mirrors the wide table: an
+    unusable account flattens header and window lines to grey, but a loud
+    error-status label stays coloured because it asks for action.
     """
     header = Text()
     name = row.account.name
@@ -829,10 +924,11 @@ def _card_text(
     cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
     rw = max((len(s) for c in cells for s in (c.rel, c.eta_rel) if s), default=0)
     label_w = max(len(lbl) for lbl, _ in windows) + 2
+    bar_w = max(_CARD_BAR_WIDTH, width - label_w - _text_w(cells, pw, cw, rw))
     for label, cell in windows:
         line = _window_text(
             cell,
-            bar_w=_CARD_BAR_WIDTH,
+            bar_w=bar_w,
             pw=pw,
             cw=cw,
             rw=rw,
@@ -845,7 +941,7 @@ def _card_text(
 
 
 def _render_cards(
-    rows: list[DashboardRow],
+    sections: list[Section],
     *,
     console: Console,
     chosen: str | None,
@@ -854,33 +950,48 @@ def _render_cards(
     now_local: datetime,
     show_forecast: bool,
 ) -> int:
-    """Narrow-terminal layout: one bordered, ruled card per account.
+    """Narrow-terminal layout: one bordered, ruled card per account, one box per section.
 
     Same chrome as the wide table (rounded border + a horizontal rule between
     accounts) so a phone-width terminal still reads as a table — but the four
     columns stack vertically inside a single cell, so each account's header and
     both window lines fit the narrow width.
     """
+    rows = [r for s in sections for r in s.rows]
     cells5 = _window_cells(
         rows, "5h", FORECAST_WINDOW_5H_SECONDS, now_local=now_local, show_forecast=show_forecast
     )
     cells7, scoped7 = _week_and_scoped_cells(rows, now_local=now_local, show_forecast=show_forecast)
-    table = Table(
-        box=box.ROUNDED,
-        show_lines=True,  # rule between accounts — each card reads as its own band
-        show_header=False,
-        padding=(0, 1),
-        border_style="dim",
-    )
-    table.add_column("", no_wrap=True)
-    for row, c5, c7, sc7 in zip(rows, cells5, cells7, scoped7, strict=True):
-        unusable = is_unusable(row, now=now)
-        table.add_row(
-            _card_text(row, c5, c7, sc7, chosen=chosen, active=active, now=now, unusable=unusable)
+    # Card chrome: 2 vertical rules + 1 column x 2 padding cells.
+    inner = console.width - 4
+    it = iter(zip(rows, cells5, cells7, scoped7, strict=True))
+    tables: list[Table] = []
+    for section in sections:
+        table = Table(
+            box=box.ROUNDED,
+            show_lines=True,  # rule between accounts — each card reads as its own band
+            show_header=False,
+            padding=(0, 1),
+            border_style="dim",
         )
-    console.print()
-    console.print(table)
-    return _drawn_width(console, table)
+        table.add_column("", no_wrap=True, width=inner)
+        for row, c5, c7, sc7 in islice(it, len(section.rows)):
+            greyed = is_unusable(row, now=now) or not row.allowed
+            table.add_row(
+                _card_text(
+                    row,
+                    c5,
+                    c7,
+                    sc7,
+                    chosen=chosen,
+                    active=active,
+                    now=now,
+                    width=inner,
+                    unusable=greyed,
+                )
+            )
+        tables.append(table)
+    return _print_sections(console, sections, tables)
 
 
 def _drawn_width(console: Console, table: Table) -> int:
@@ -896,16 +1007,28 @@ def render_dashboard(
     active: str | None = None,
     now: datetime | None = None,
     show_forecast: bool = True,
+    sections: list[Section] | None = None,
+    context: str | None = None,
+    cache_note: str | None = None,
 ) -> int:
-    """Draw the account table; returns the width it drew, for alignment below."""
+    """Draw the account boxes; returns the width it drew, for alignment below.
+
+    ``sections`` (see ``build_sections``) draws one box per group; without it
+    there is a single box. ``context`` is a dim line under the status line and
+    ``cache_note`` is appended to the status line.
+    """
     now = now or datetime.now(UTC)
     now_local = now.astimezone()
 
     # Always order the table by subscription expiry, earliest first.
     rows = _by_expiry(rows)
+    sections = sections or [Section(None, rows)]
 
     console.print()
-    console.print(Text(status_line(active, chosen), style="dim"))
+    status = status_line(active, chosen)
+    console.print(Text(f"{status} · {cache_note}" if cache_note else status, style="dim"))
+    if context:
+        console.print(Text(context, style="dim"))
 
     kwargs: dict[str, Any] = dict(
         console=console,
@@ -917,9 +1040,9 @@ def render_dashboard(
     )
     width = None
     if console.width >= _CARDS_MAX_WIDTH:
-        width = _render_table(rows, **kwargs)
+        width = _render_table(sections, **kwargs)
     if width is None:
-        width = _render_cards(rows, **kwargs)
+        width = _render_cards(sections, **kwargs)
 
     _render_action_footer(rows, console=console, active=active, now_utc=now)
     return width

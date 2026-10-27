@@ -32,12 +32,14 @@ from claude_rotate.dashboard import (
     NO_DATA_NOTES,
     DashboardRow,
     attach_forecast_rates,
+    build_sections,
     forecast_enabled,
     relogin_row,
     render_dashboard,
     render_providers,
     render_stale_footer,
     row_from_cache,
+    short_path,
     status_json,
 )
 from claude_rotate.groups import (
@@ -235,15 +237,31 @@ def _providers_or_empty(paths: Paths) -> list[ProviderQuota]:
 
 
 def _render_dashboard(collected: _Collected, console: Console) -> None:
-    """Draw the coloured table + stale-metadata footer for one snapshot."""
+    """Draw one box per group (one box without groups) + footers for one snapshot."""
     show_forecast = forecast_enabled()
+    context = None
+    if collected.groups:
+        group = f"group {collected.group}" if collected.group else "no group"
+        context = (
+            f"{short_path(collected.session_dir)} · {group}"
+            f" · next pick {collected.chosen or 'none'}"
+        )
     width = render_dashboard(
         collected.rows,
         chosen=collected.chosen,
         active=collected.active,
         console=console,
         show_forecast=show_forecast,
+        sections=build_sections(collected.rows, collected.groups, collected.group),
+        context=context,
     )
+    if collected.isolation_missing:
+        line = Text(" ⚠ ", style="yellow")
+        line.append(
+            "Account groups need session isolation — run:"
+            " claude-rotate config set session_isolation true"
+        )
+        console.print(line)
     render_stale_footer(collected.rows, console=console)
     # Pinned to the account table's width — the two are stacked, and the
     # forecast toggle covers both for the same reason.

@@ -1074,3 +1074,33 @@ def test_status_saves_live_probe_to_cache(tmp_path, monkeypatch) -> None:
     cached = UsageCache(p).load("a")
     assert cached is not None
     assert cached.h5_pct == 37.0
+
+
+def test_status_dashboard_shows_group_boxes_context_and_isolation_warning(
+    tmp_path, monkeypatch
+) -> None:
+    from dataclasses import replace
+    from io import StringIO
+
+    from rich.console import Console
+
+    from claude_rotate.commands import status
+    from claude_rotate.dashboard import short_path
+
+    p, bound = _grouped_status(monkeypatch, tmp_path)
+    collected = status._collect(p, bound)
+
+    def render(c: status._Collected) -> str:
+        console = Console(file=StringIO(), width=160, force_terminal=False, color_system=None)
+        status._render_dashboard(c, console)
+        return console.file.getvalue()
+
+    out = render(collected)
+    shown = short_path(bound)  # ~-shortened when the tmp dir lives under $HOME
+    assert f"{shown} · group k · next pick a" in out
+    assert f" k · {shown}" in out
+    assert " ungrouped · not allowed here" in out
+    assert "session isolation" not in out
+    assert "Account groups need session isolation" in render(
+        replace(collected, isolation_missing=True)
+    )

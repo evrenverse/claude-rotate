@@ -492,3 +492,17 @@ class TestProviderForecastInReport:
     def test_marks_a_window_that_is_already_at_the_limit(self) -> None:
         """Same wording the account cards use when a window is spent."""
         assert "reached" in self._render(100.0, 9000)
+
+
+def test_report_hides_zero_scoped() -> None:
+    from claude_rotate.selection import ScopedLimit
+
+    row = DashboardRow(
+        account=_account("matri"),
+        h5_pct=9.0,
+        w7_pct=31.0,
+        h5_reset_secs=4 * _HOUR,
+        w7_reset_secs=1 * _DAY,
+        w7_scoped=(ScopedLimit(label="fable", pct=0.2, reset_secs=1 * _DAY),),
+    )
+    assert "fable" not in build_report([row], chosen="matri", active="matri", now=NOW)
