@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 from claude_rotate import __version__
 from claude_rotate.config import paths
@@ -225,6 +226,8 @@ Options:
   --json               Output JSON instead of the coloured table
   --watch [SECONDS]    Live view: re-probe and redraw on an alternate screen
                        every SECONDS (default 5); Ctrl-C to quit
+  --dir PATH           Evaluate as if launched in PATH (default: current directory):
+                       its group, allowed accounts, next pick and exit code
   -h, --help           Show this help\
 """
 
@@ -469,6 +472,7 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=_SUPPRESS,
     )
+    sp_status.add_argument("--dir", type=Path, default=None, metavar="PATH", help=_SUPPRESS)
     sp_status.add_argument("-h", "--help", action="help", help=_SUPPRESS)
 
     # doctor
@@ -662,7 +666,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             from claude_rotate.commands import status
 
-            return status.execute(p, as_json=args.json, report=args.report, watch=args.watch)
+            return status.execute(
+                p, as_json=args.json, report=args.report, watch=args.watch, session_dir=args.dir
+            )
         if args.command == "doctor":
             from claude_rotate.commands import doctor
 

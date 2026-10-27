@@ -109,6 +109,21 @@ def _blocks(report: str) -> list[list[str]]:
     return blocks
 
 
+def test_report_marks_group_and_not_allowed() -> None:
+    from dataclasses import replace
+
+    rows = [
+        replace(_row("grace", h5=10.0, w7=10.0), group="k"),
+        replace(_row("matri", h5=10.0, w7=10.0), group="k", allowed=False),
+        _row("stamp", h5=10.0, w7=10.0),
+    ]
+    headers = _header_lines(build_report(rows, chosen="grace", active=None, now=NOW))
+    by_name = {n: next(ln for ln in headers if n in ln) for n in ("grace", "matri", "stamp")}
+    assert by_name["grace"].endswith("· k")
+    assert by_name["matri"].endswith("· k · not allowed here")
+    assert "·" not in by_name["stamp"]
+
+
 def test_marker_both_when_active_equals_chosen() -> None:
     report = build_report(_sample(), chosen="grace", active="grace", now=NOW)
     assert "@> grace" in report

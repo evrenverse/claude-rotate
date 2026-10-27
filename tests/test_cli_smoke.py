@@ -1,6 +1,7 @@
 # tests/test_cli_smoke.py
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import patch
 
 from claude_rotate import __version__
@@ -123,6 +124,16 @@ def test_status_json_flag(tmp_path, monkeypatch, capsys) -> None:
     rc = main(["status", "--json"])
     # No accounts → non-zero but should not crash with unrecognised flag
     assert isinstance(rc, int)
+
+
+def test_status_dir_flag_reaches_execute(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("CLAUDE_ROTATE_DIR", str(tmp_path))
+    with patch("claude_rotate.commands.status.execute", return_value=0) as mock_status:
+        assert main(["status", "--json", "--dir", "~/proj"]) == 0
+    assert mock_status.call_args.kwargs["session_dir"] == Path("~/proj")
+    with patch("claude_rotate.commands.status.execute", return_value=0) as mock_status:
+        main(["status"])
+    assert mock_status.call_args.kwargs["session_dir"] is None
 
 
 def test_passthrough_multiple_flags(monkeypatch, tmp_path) -> None:

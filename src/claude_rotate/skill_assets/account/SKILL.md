@@ -46,6 +46,11 @@ as-is. Never fabricate numbers.
   window resets first, a lone `—` when there is no trend yet, or `reached` once
   usage is already ≥100%. Both lines share one column grid, so the forecast %
   stacks under the current % and the limit-ETA clock under the reset clock.
+- **Groups** (only when account groups are configured): each header ends with
+  the account's group (`· kunde`) and `· not allowed here` when the current
+  directory may not use that account — it is shown but never picked here. The `>` marker is already directory-aware: it names the
+  account the next launch *in this directory* would use. To report another
+  directory, run `claude-rotate status --report --dir <path>`.
 - **Warnings** (only when action is needed; absent otherwise): an account needs
   re-login, or a subscription expires within 7 days. Quota-usage risk and the
   fallback recommendation are intentionally not shown.

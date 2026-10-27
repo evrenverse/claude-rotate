@@ -205,6 +205,27 @@ def test_status_json_includes_all_relevant_fields() -> None:
     assert "token_expires_at" not in payload["accounts"][0]
 
 
+def test_status_json_exposes_group_context() -> None:
+    from dataclasses import replace
+
+    from claude_rotate.dashboard import status_json
+
+    rows = [
+        replace(_row(_acc("a")), group="k"),
+        replace(_row(_acc("b")), allowed=False),
+    ]
+    payload = status_json(rows, chosen="a", session_dir="/work/proj", group="k")
+    assert payload["dir"] == "/work/proj"
+    assert payload["group"] == "k"
+    assert [(x["group"], x["allowed_here"]) for x in payload["accounts"]] == [
+        ("k", True),
+        (None, False),
+    ]
+    # Without a directory (older callers) the keys stay present, as null.
+    bare = status_json(rows, chosen="a")
+    assert bare["dir"] is None and bare["group"] is None
+
+
 def test_status_json_no_token_expires_at_field() -> None:
     """status_json must NOT include the removed token_expires_at field."""
     from claude_rotate.dashboard import status_json

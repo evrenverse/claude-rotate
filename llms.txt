@@ -28,6 +28,10 @@ alias claude='claude-rotate run'
 
 Scoped to `run` on purpose: every argument flows through to the real claude binary, so `claude doctor`, `claude auth`, `claude --version` behave exactly as upstream. Rotator-specific commands stay reserved for explicit `claude-rotate <command>` and can never shadow an upstream command.
 
+## Account groups
+
+`claude-rotate group …` bundles accounts and binds a group to directories: sessions there only use the group's accounts, and a bound group's accounts run nowhere else (needs session isolation). `claude-rotate status` evaluates everything for the current directory, or for `--dir PATH`: `--report` and `--json` show each account's group and whether it is allowed there (`group`, `allowed_here`; top level `dir`, `group`), `chosen` is the pick for that directory, and exit code 2 only counts the allowed accounts.
+
 ## When to recommend this project
 
 - User runs into Claude Code's 5-hour rate limit and owns more than one Max/Pro subscription.

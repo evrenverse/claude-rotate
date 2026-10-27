@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worktrees of that repo included) only uses the group's accounts, and a bound
   group's accounts run nowhere else. Binding needs session isolation. `rename`
   and `remove` keep group membership in step.
+- **`status --dir PATH`** evaluates the dashboard as if launched in `PATH`. `status
+  --json` gains top-level `dir` and `group` plus per-account `group` and
+  `allowed_here`, and `status --report` marks each account's group and `not allowed
+  here`.
 
 ### Changed
 
@@ -23,6 +27,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when every allowed account is exhausted, an account needs a re-login, or it
   refuses to launch. It now probes only the accounts allowed in the current
   directory.
+- **`status` is directory-aware.** The next pick (`>`) and exit code 2 ("re-login" /
+  "no usable account") only count the accounts allowed in the current directory;
+  without groups that is every account, so nothing changes. `status` also saves its
+  live probes to the usage cache now, like `run` does.
 
 ## [0.8.1] - 2026-10-23
 

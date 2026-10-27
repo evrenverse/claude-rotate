@@ -95,9 +95,9 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 | `claude-rotate login <email> <handle> --replace` | Overwrite an existing account |
 | `claude-rotate login <email> <handle> --from-env` / `--token-file <path>` | Headless login (no browser) from `CLAUDE_ROTATE_TOKEN` / a token file — grants inference-only scope |
 | `claude-rotate list` | Show configured accounts (no network) |
-| `claude-rotate status` | Live dashboard + health exit code. Adds an *other providers* table for the Codex and Gemini subscriptions on this machine, when present |
+| `claude-rotate status [--dir PATH]` | Live dashboard + health exit code, evaluated for the current directory (or `PATH`): with [groups](#account-groups) only that directory's allowed accounts count for the next pick (`>`) and the exit code. Adds an *other providers* table for the Codex and Gemini subscriptions on this machine, when present |
 | `claude-rotate status --report` | Compact single-table overview: running account (`@`), next pick (`>`), per-window resets (clock + weekday + relative) and warnings |
-| `claude-rotate status --json` | Machine-readable state; each account lists its live Claude Code session IDs in `claude_sessions` |
+| `claude-rotate status --json` | Machine-readable state; each account lists its live Claude Code session IDs in `claude_sessions`, its `group` and whether it is `allowed_here`; the top level adds the resolved `dir` and its `group` |
 | `claude-rotate pin <name>` / `unpin` | Force / resume rotation |
 | `claude-rotate disable <name>` / `enable <name>` | Take an account out of rotation (never auto-picked, still probed + shown greyed-out) / put it back |
 | `claude-rotate group <create\|delete\|add\|remove\|bind\|unbind\|list> …` | Group accounts and bind a group to directories, so a project only uses (and its accounts only run in) its own group — see [Account groups](#account-groups) |

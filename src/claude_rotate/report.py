@@ -122,6 +122,10 @@ def _render_cards(
             head += f" · {days} left"
         if row.account.disabled:
             head += " · disabled"
+        if row.group:
+            head += f" · {row.group}"
+        if not row.allowed:
+            head += " · not allowed here"
         indicator = session_indicator(row.session_load)
         if indicator:
             head += f" · {indicator}"

@@ -142,6 +142,10 @@ class DashboardRow:
     w7_rate_per_sec: float | None = None
     # Model-scoped weekly limits (e.g. Fable's separate weekly cap); display-only.
     w7_scoped: tuple[ScopedLimit, ...] = ()
+    # Account group (None = ungrouped) and whether this directory may use the
+    # account; a not-allowed row is shown but never part of the pick or exit code.
+    group: str | None = None
+    allowed: bool = True
 
 
 class _RateSource(Protocol):
@@ -988,9 +992,13 @@ def status_json(
     active: str | None = None,
     now: datetime | None = None,
     providers: list[ProviderQuota] | None = None,
+    session_dir: str | None = None,
+    group: str | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     return {
+        "dir": session_dir,
+        "group": group,
         "chosen": chosen,
         "active": active,
         # Always present, so consumers can rely on the key rather than probing.
@@ -1046,6 +1054,8 @@ def status_json(
                 "note": r.note,
                 "from_cache": r.from_cache,
                 "disabled": r.account.disabled,
+                "group": r.group,
+                "allowed_here": r.allowed,
                 "sessions": (
                     {"active": r.session_load.active, "idle": r.session_load.idle}
                     if r.session_load is not None and r.session_load.open > 0

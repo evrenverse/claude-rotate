@@ -803,7 +803,9 @@ def test_run_watch_redraws_then_exits_on_keyboard_interrupt(tmp_path, monkeypatc
     buf = io.StringIO()
     console = Console(file=buf, force_terminal=True, width=100)
 
-    rc = status._run_watch(p, interval=5.0, as_json=False, report=False, console=console)
+    rc = status._run_watch(
+        p, interval=5.0, as_json=False, report=False, console=console, here=tmp_path
+    )
 
     assert rc == 0
     assert probe_calls["n"] >= 2  # redrew at least twice before Ctrl-C
@@ -960,3 +962,115 @@ def test_status_aligns_the_provider_table_with_the_account_table(tmp_path, capsy
 
     borders = {len(ln) for ln in capsys.readouterr().err.splitlines() if ln.startswith(("╭", "╰"))}
     assert len(borders) == 1, f"tables drawn at differing widths: {sorted(borders)}"
+
+
+# --- account groups: --dir, allowed set, exit code, cache writes -------------
+
+
+def _grouped_status(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    unauthorized: tuple[str, ...] = (),
+    h5: float = 10.0,
+):
+    """Two accounts a, b with group k={a} bound to ``tmp_path/bound``; return (paths, bound dir).
+
+    ``probe_many`` is patched: accounts in ``unauthorized`` fail with a 401, the rest
+    probe at ``h5`` percent.
+    """
+    from claude_rotate.groups import Group
+    from claude_rotate.selection import Candidate
+    from claude_rotate.settings import RotateConfig, save_config
+
+    monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"a": _acc("a"), "b": _acc("b")})
+    bound = (tmp_path / "bound").resolve()
+    bound.mkdir()
+    (tmp_path / "other").mkdir()
+    save_config(
+        p, RotateConfig(session_isolation=True, groups={"k": Group("k", ("a",), (str(bound),))})
+    )
+
+    def probe(accts):
+        return [
+            Candidate(
+                account=a,
+                h5_pct=None if a.name in unauthorized else h5,
+                w7_pct=None if a.name in unauthorized else h5,
+                h5_reset_secs=3600,
+                w7_reset_secs=86400,
+                probe_error="unauthorized" if a.name in unauthorized else "",
+            )
+            for a in accts
+        ]
+
+    monkeypatch.setattr("claude_rotate.commands.status.probe_many", probe)
+    return p, bound
+
+
+def test_status_json_dir_marks_allowed_and_chosen(tmp_path, monkeypatch, capsys) -> None:
+    from claude_rotate.commands import status
+
+    p, bound = _grouped_status(monkeypatch, tmp_path)
+    status.execute(p, as_json=True, session_dir=bound)
+    data = json.loads(capsys.readouterr().out)
+    assert data["group"] == "k"
+    assert data["dir"] == str(bound.resolve())
+    assert data["chosen"] == "a"
+    assert {x["name"]: x["allowed_here"] for x in data["accounts"]} == {"a": True, "b": False}
+    assert {x["name"]: x["group"] for x in data["accounts"]} == {"a": "k", "b": None}
+
+
+def test_status_json_elsewhere_excludes_the_bound_group(tmp_path, monkeypatch, capsys) -> None:
+    from claude_rotate.commands import status
+
+    p, _ = _grouped_status(monkeypatch, tmp_path)
+    monkeypatch.chdir(tmp_path / "other")  # no --dir: falls back to the cwd
+    status.execute(p, as_json=True)
+    data = json.loads(capsys.readouterr().out)
+    assert data["group"] is None
+    assert data["dir"] == str((tmp_path / "other").resolve())
+    assert data["chosen"] == "b"
+    assert {x["name"]: x["allowed_here"] for x in data["accounts"]} == {"a": False, "b": True}
+
+
+def test_status_exit_code_counts_only_allowed(tmp_path, monkeypatch) -> None:
+    from claude_rotate.commands import status
+
+    p, bound = _grouped_status(monkeypatch, tmp_path, unauthorized=("b",))
+    # b needs a re-login but is not allowed in k's directory: a is healthy -> 0.
+    assert status.execute(p, as_json=False, session_dir=bound) == 0
+    # Anywhere else b is the only allowed account -> 2.
+    assert status.execute(p, as_json=False, session_dir=tmp_path / "other") == 2
+
+
+def test_status_exit_code_2_when_the_allowed_set_is_exhausted(tmp_path, monkeypatch) -> None:
+    from claude_rotate.commands import status
+
+    p, bound = _grouped_status(monkeypatch, tmp_path, h5=100.0)
+    assert status.execute(p, as_json=False, session_dir=bound) == 2
+
+
+def test_status_dir_missing_is_error(tmp_path, monkeypatch, capsys) -> None:
+    from claude_rotate.commands import status
+
+    p, _ = _grouped_status(monkeypatch, tmp_path)
+    rc = status.execute(p, as_json=True, session_dir=tmp_path / "nope")
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "no such directory" in captured.err
+    assert captured.out == ""
+
+
+def test_status_saves_live_probe_to_cache(tmp_path, monkeypatch) -> None:
+    from claude_rotate.commands import status
+    from claude_rotate.usage_cache import UsageCache
+
+    p, bound = _grouped_status(monkeypatch, tmp_path, h5=37.0)
+    status.execute(p, as_json=False, session_dir=bound)
+    cached = UsageCache(p).load("a")
+    assert cached is not None
+    assert cached.h5_pct == 37.0

@@ -12,11 +12,15 @@ from __future__ import annotations
 
 import contextlib
 import json as _json
+import os
 import sys
 import time
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.text import Text
@@ -36,12 +40,21 @@ from claude_rotate.dashboard import (
     row_from_cache,
     status_json,
 )
+from claude_rotate.groups import (
+    Group,
+    allowed_accounts,
+    group_of,
+    has_bound_groups,
+    matching_group,
+    session_path,
+)
 from claude_rotate.metadata import refresh_stale_accounts
-from claude_rotate.probe import probe_many
+from claude_rotate.probe import probe_many, probe_result_of
 from claude_rotate.providers import ProviderQuota
 from claude_rotate.providers import collect as collect_providers
 from claude_rotate.report import build_report
 from claude_rotate.selection import is_usable, pick_best, selection_pool
+from claude_rotate.settings import load_config
 from claude_rotate.sync import read_current_session
 from claude_rotate.usage_cache import UsageCache
 
@@ -60,10 +73,18 @@ class _Collected:
     active: str | None
     relogin_count: int
     has_usable: bool
+    # The directory the snapshot was evaluated for (``session_path``-resolved) and
+    # the group bound to it, if any.
+    session_dir: Path
+    group: str | None
+    groups: Mapping[str, Group]
+    # Bound groups without session isolation: ``run`` refuses to launch there.
+    isolation_missing: bool
     accounts_empty: bool = False
     # Other subscriptions on this machine — display only, never part of
     # ``exit_code``: these codes describe Anthropic account health.
     providers: list[ProviderQuota] = field(default_factory=list)
+    cache_age_secs: int | None = None
 
     @property
     def exit_code(self) -> int:
@@ -76,8 +97,12 @@ class _Collected:
         return 0
 
 
-def _collect(paths: Paths) -> _Collected:
+def _collect(paths: Paths, here: Path) -> _Collected:
     """Probe every account and resolve the dashboard rows + chosen/active markers.
+
+    ``here`` is the ``session_path``-resolved directory the snapshot is evaluated
+    for: its allowed set decides the pick and the health counts, while every
+    account still gets a row.
 
     This is the slow part (live probes + best-effort metadata refresh); the
     ``--watch`` loop calls it once per cycle while the previous frame stays on
@@ -87,6 +112,10 @@ def _collect(paths: Paths) -> _Collected:
     with contextlib.suppress(Exception):
         refresh_stale_accounts(paths)
 
+    cfg = load_config(paths)
+    group = matching_group(cfg.groups, here)
+    group_name = group.name if group else None
+    isolation_missing = has_bound_groups(cfg.groups) and not cfg.session_isolation
     accounts = Store(paths).load()
     if not accounts:
         return _Collected(
@@ -95,8 +124,13 @@ def _collect(paths: Paths) -> _Collected:
             active=None,
             relogin_count=0,
             has_usable=False,
+            session_dir=here,
+            group=group_name,
+            groups=cfg.groups,
+            isolation_missing=isolation_missing,
             accounts_empty=True,
         )
+    allowed = allowed_accounts(cfg.groups, accounts, here)
 
     # The third-party readers run alongside the probes rather than after them:
     # agy needs a few seconds, and that should overlap the probes, not follow.
@@ -115,7 +149,8 @@ def _collect(paths: Paths) -> _Collected:
             # falls back to the usage cache and stays in the selection pool.
             err = c.probe_error
             if err == "unauthorized":
-                relogin_count += 1
+                if c.account.name in allowed:
+                    relogin_count += 1
                 rows.append(relogin_row(c.account, "token invalid (401/403)"))
                 continue
             filled, row = row_from_cache(c, cache, probe_error=err)
@@ -128,14 +163,13 @@ def _collect(paths: Paths) -> _Collected:
             if err in NO_DATA_NOTES or err.split(":")[0] in NO_DATA_NOTES:
                 rows.append(row)
             else:
-                relogin_count += 1
+                if c.account.name in allowed:
+                    relogin_count += 1
                 rows.append(relogin_row(c.account, "probe failed (token may be expired)"))
             continue
-        if c.w7_scoped:
-            # A successful scoped fetch is rare (the OAuth endpoint 429s
-            # aggressively) — persist it so later backfills serve this value
-            # instead of an hours-older one; status never saves full probes.
-            cache.update_scoped(c.account.name, c.w7_scoped)
+        # Keeps the last scoped values when this fetch returned none (the OAuth
+        # endpoint 429s aggressively), so later backfills still have something.
+        cache.save(c.account.name, probe_result_of(c))
         rows.append(
             DashboardRow(
                 account=c.account,
@@ -152,7 +186,7 @@ def _collect(paths: Paths) -> _Collected:
 
     # Shared with run.py so the dashboard's ``>`` marker names the account run
     # would actually launch. If nothing is eligible, ``chosen`` stays None.
-    pool = selection_pool(resolved, accounts)
+    pool = selection_pool(resolved, accounts, allowed=allowed)
 
     chosen = None
     if pool:
@@ -171,6 +205,8 @@ def _collect(paths: Paths) -> _Collected:
             r,
             session_load=loads.get(r.account.name),
             claude_sessions=tuple(claude_ids.get(r.account.name, [])),
+            group=group_of(cfg.groups, r.account.name),
+            allowed=r.account.name in allowed,
         )
         for r in rows
     ]
@@ -181,7 +217,11 @@ def _collect(paths: Paths) -> _Collected:
         chosen=chosen,
         active=active,
         relogin_count=relogin_count,
-        has_usable=bool(resolved) and any(is_usable(c) for c in resolved),
+        has_usable=any(is_usable(c) for c in resolved if c.account.name in allowed),
+        session_dir=here,
+        group=group_name,
+        groups=cfg.groups,
+        isolation_missing=isolation_missing,
         providers=providers,
     )
 
@@ -214,14 +254,45 @@ def _no_accounts_hint() -> str:
     return "  No accounts configured. Run: claude-rotate login <email> [name]"
 
 
+def _json_of(collected: _Collected) -> dict[str, Any]:
+    return status_json(
+        collected.rows,
+        chosen=collected.chosen,
+        active=collected.active,
+        providers=collected.providers,
+        session_dir=str(collected.session_dir),
+        group=collected.group,
+    )
+
+
+def _session_dir(session_dir: Path | None) -> Path | None:
+    """The directory to evaluate for: ``--dir``, else the cwd (same rule as ``run``).
+
+    ``None`` means ``--dir`` names no existing directory.
+    """
+    if session_dir is None:
+        try:
+            return session_path(Path.cwd())
+        except OSError:  # deleted cwd; "/" is bound to nothing
+            return session_path(Path("/"))
+    if not os.path.isdir(os.path.expanduser(session_dir)):  # unlike Path.expanduser, never raises
+        return None
+    return session_path(session_dir)
+
+
 def execute(
     paths: Paths,
     *,
     as_json: bool,
     report: bool = False,
     watch: float | None = None,
+    session_dir: Path | None = None,
 ) -> int:
     console = Console(file=sys.stderr)
+    here = _session_dir(session_dir)
+    if here is None:
+        print(f"error: no such directory: {session_dir}", file=sys.stderr)
+        return 1
 
     # ``--watch`` only makes sense on a real terminal — when piped/captured we
     # fall through to a single render so stdout (JSON/report) stays clean.
@@ -232,9 +303,10 @@ def execute(
             as_json=as_json,
             report=report,
             console=console,
+            here=here,
         )
 
-    collected = _collect(paths)
+    collected = _collect(paths, here)
     if collected.accounts_empty:
         print(_no_accounts_hint(), file=sys.stderr)
         return 3
@@ -254,17 +326,7 @@ def execute(
             )
         )
     elif as_json:
-        print(
-            _json.dumps(
-                status_json(
-                    collected.rows,
-                    chosen=collected.chosen,
-                    active=collected.active,
-                    providers=collected.providers,
-                ),
-                indent=2,
-            )
-        )
+        print(_json.dumps(_json_of(collected), indent=2))
     else:
         _render_dashboard(collected, console)
 
@@ -288,6 +350,7 @@ def _run_watch(
     as_json: bool,
     report: bool,
     console: Console,
+    here: Path,
 ) -> int:
     """Re-probe and redraw on the alternate screen every ``interval`` seconds.
 
@@ -301,7 +364,7 @@ def _run_watch(
     try:
         console.print("  Probing accounts…", style="dim")
         while True:
-            collected = _collect(paths)
+            collected = _collect(paths, here)
             console.clear()
             if collected.accounts_empty:
                 console.print(_no_accounts_hint())
@@ -316,16 +379,7 @@ def _run_watch(
                     )
                 )
             elif as_json:
-                console.print_json(
-                    _json.dumps(
-                        status_json(
-                            collected.rows,
-                            chosen=collected.chosen,
-                            active=collected.active,
-                            providers=collected.providers,
-                        )
-                    )
-                )
+                console.print_json(_json.dumps(_json_of(collected)))
             else:
                 _render_dashboard(collected, console)
             if not collected.accounts_empty:
