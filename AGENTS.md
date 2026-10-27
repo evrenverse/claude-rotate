@@ -76,3 +76,17 @@ After setup the agent should confirm each of these:
 - [ ] (optional) `claude-rotate install-skill` wrote `~/.agents/skills/account/SKILL.md` and symlinked it into each detected agent.
 
 If any of these fail, report the exact output and stop — do not try to "fix" it by guessing.
+
+---
+
+## Working on this repository (contributors and coding agents)
+
+This repository is public. **Nothing from a real machine or a real person may ever land in it** — not in code, tests, fixtures, examples, docs, commit messages, tags or release notes:
+
+- no real account handles, names, e-mail addresses or plan details taken from an `accounts.json`, `claude-rotate list`/`status` output or a terminal session;
+- no real home directories, usernames, project, workspace, company or customer names, and no paths from the maintainer's machine;
+- no tokens, not even truncated ones.
+
+Use neutral placeholders instead: accounts `alice`, `bob`, `work`, `personal`; groups `client`, `team`; paths `/home/u/...` or `tmp_path`; e-mail `@example.com`; fake tokens in the existing `sk-ant-oat01-aaaa…` pattern.
+
+Before every commit, read the staged diff (`git diff --cached`) for anything that came from a real setup. A leak that reaches GitHub has to be removed from the history (rewrite + force-push + rebuilt release), which is far more work than replacing a name before the commit.

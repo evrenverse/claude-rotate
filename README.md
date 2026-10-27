@@ -219,7 +219,7 @@ Anthropic invalidates OAuth refresh tokens after roughly two weeks of "stale idl
 
 ## Contributing
 
-Issues and PRs welcome — see [`AGENTS.md`](./AGENTS.md) if you want your coding agent to help and [`SECURITY.md`](./SECURITY.md) for the redaction rules before pasting logs.
+Issues and PRs welcome — see [`AGENTS.md`](./AGENTS.md) if you want your coding agent to help (including its rule that no real names, accounts or paths may enter the repository) and [`SECURITY.md`](./SECURITY.md) for the redaction rules before pasting logs.
 
 ---
 
