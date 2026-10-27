@@ -16,6 +16,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   group's accounts run nowhere else. Binding needs session isolation. `rename`
   and `remove` keep group membership in step.
 
+### Changed
+
+- **`run` launches silently.** It no longer prints the dashboard (or the one-line
+  summary when piped); `claude-rotate status` shows it. `run` prints to stderr only
+  when every allowed account is exhausted, an account needs a re-login, or it
+  refuses to launch. It now probes only the accounts allowed in the current
+  directory.
+
 ## [0.8.1] - 2026-10-23
 
 ### Fixed

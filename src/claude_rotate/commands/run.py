@@ -9,8 +9,7 @@ import time
 import uuid as uuid_lib
 from dataclasses import replace
 from datetime import UTC, datetime
-
-from rich.console import Console
+from pathlib import Path
 
 from claude_rotate import sessions
 from claude_rotate.accounts import Account, Store
@@ -20,19 +19,17 @@ from claude_rotate.config import (
     Paths,
     file_lock,
 )
-from claude_rotate.dashboard import (
-    DashboardRow,
-    attach_forecast_rates,
-    compact_one_liner,
-    forecast_enabled,
-    relogin_row,
-    render_dashboard,
-    render_stale_footer,
-    row_from_cache,
-)
+from claude_rotate.dashboard import row_from_cache
 from claude_rotate.exec import exec_claude
+from claude_rotate.groups import (
+    Group,
+    allowed_accounts,
+    has_bound_groups,
+    matching_group,
+    session_path,
+)
 from claude_rotate.metadata import refresh_stale_accounts
-from claude_rotate.probe import ProbeResult, probe_many
+from claude_rotate.probe import probe_many, probe_result_of
 from claude_rotate.refresh import ensure_fresh
 from claude_rotate.selection import Candidate, is_usable, pick_best, selection_pool
 from claude_rotate.settings import load_config
@@ -106,6 +103,8 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     with contextlib.suppress(Exception):
         refresh_stale_accounts(paths)
 
+    cfg = load_config(paths)
+
     # Pre-run reconcile: pull any drift the cron hasn't picked up yet. If the
     # lock is contended the reconcile is skipped — and so is the refresh below,
     # because accounts.json may still hold a token the running session already
@@ -114,7 +113,7 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
     try:
         from claude_rotate.sync import reconcile_isolated
 
-        if load_config(paths).session_isolation:
+        if cfg.session_isolation:
             reconcile_isolated(paths, now=datetime.now(UTC))
         else:
             reconcile_all(paths, now=datetime.now(UTC))
@@ -136,23 +135,43 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         _print_all_disabled_message()
         return 3
 
+    # Bound groups are only enforceable with per-account credentials: on the
+    # shared ~/.claude/.credentials.json every launch would switch the running
+    # sessions of the other directories to this account.
+    if has_bound_groups(cfg.groups) and not cfg.session_isolation:
+        _print_groups_need_isolation_message()
+        return 3
+
+    try:
+        cwd = Path.cwd()
+    except OSError:  # deleted cwd; "/" is bound to nothing
+        cwd = Path("/")
+    here = session_path(cwd)
+    group = matching_group(cfg.groups, here)
+    allowed = allowed_accounts(cfg.groups, accounts, here)
+    if not any(not accounts[n].disabled for n in allowed):
+        _print_nothing_allowed_message(group)
+        return 3
+    # Restrict once, here: every later path (probe, the no-probe-data fallback,
+    # pin, selection) only ever sees accounts this directory may use.
+    accounts = {n: a for n, a in accounts.items() if n in allowed}
+
     # Proactively refresh any account whose access token is stale BEFORE
     # we probe. Without this the probe hits Anthropic with a dead token,
-    # the dashboard flags the account as 'relogin', and — even though a
+    # the account is flagged 'relogin', and — even though a
     # later ensure_fresh in the chosen-account path would have recovered
     # — the child claude boots with whatever we could refresh (or not)
     # and may show the dreaded login prompt. Refreshing up-front keeps
-    # every account usable and the dashboard honest.
+    # every account usable.
     if reconciled:
         with contextlib.suppress(Exception):
-            isolated = load_config(paths).session_isolation
-            refreshed = refresh_stale_tokens(paths, now=datetime.now(UTC), isolated=isolated)
+            refreshed = refresh_stale_tokens(
+                paths, now=datetime.now(UTC), isolated=cfg.session_isolation
+            )
             if refreshed:
                 # accounts.json was rewritten — reload so probe sees fresh tokens
-                accounts = store.load()
+                accounts = {n: a for n, a in store.load().items() if n in allowed}
 
-    # Probe every account so the dashboard is always complete — pinning
-    # only constrains the selection pool, not what the user sees.
     all_accounts = list(accounts.values())
     pinned_names = {a.name for a in all_accounts if a.pinned}
     disabled_names = {a.name for a in all_accounts if a.disabled}
@@ -162,60 +181,42 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
 
     # Fill in any candidates that failed live-probe with cached values
     resolved: list[Candidate] = []
-    dashboard_rows: list[DashboardRow] = []
     for c in candidates:
         if c.h5_pct is None and c.w7_pct is None:
             err = c.probe_error
-            # Unauthorized → relogin row, skip from resolved
+            # Unauthorized → needs a re-login, skip from resolved
             if err == "unauthorized":
-                dashboard_rows.append(relogin_row(c.account, "token invalid (401/403)"))
+                print(
+                    f"  ⚠ {c.account.name}: token invalid — run claude-rotate login "
+                    f"{c.account.email or '<email>'} {c.account.name}",
+                    file=sys.stderr,
+                )
                 continue
             # Any other failure (429 without headers, 5xx, network) is a probe
             # failure rather than trustworthy quota data: fall back to cached
             # usage and keep the candidate in the selection pool.
-            filled, row = row_from_cache(c, cache, probe_error=err)
-            dashboard_rows.append(row)
+            filled, _ = row_from_cache(c, cache, probe_error=err)
             if filled is None:
                 continue
             c = filled
         else:
-            cache.save(c.account.name, _to_probe_result(c))
-            dashboard_rows.append(
-                DashboardRow(
-                    account=c.account,
-                    h5_pct=c.h5_pct,
-                    w7_pct=c.w7_pct,
-                    h5_reset_secs=c.h5_reset_secs,
-                    w7_reset_secs=c.w7_reset_secs,
-                    # The OAuth usage fetch behind scoped limits rate-limits
-                    # hard; backfill from the cache (save above preserved the
-                    # last known value) rather than hiding them.
-                    w7_scoped=c.w7_scoped or cache.load_scoped(c.account.name),
-                )
-            )
+            cache.save(c.account.name, probe_result_of(c))
         resolved.append(c)
 
-    # Stamp the recent-burn rates from the usage history so the rendered forecast
-    # weights the recent tail, not just the window average. (Selection/routing
-    # still uses the average pace — see selection.py.)
-    dashboard_rows = attach_forecast_rates(dashboard_rows, cache, time.time())
-
-    # Disabled accounts are never selection candidates (they remain in
-    # dashboard_rows so the user still sees them, greyed out).
+    # Disabled accounts are never selection candidates.
     enabled_resolved = [c for c in resolved if c.account.name not in disabled_names]
 
-    cfg = load_config(paths)
+    group_name = group.name if group else None
 
     if not enabled_resolved:
         # No probe data for any *enabled* account → exec the first enabled
         # account with its cached token. Prefer a pinned-enabled one. An
-        # enabled account is guaranteed to exist (all-disabled returned above).
+        # enabled allowed account is guaranteed to exist (checked above).
         first = next(
             (a for a in accounts.values() if a.pinned and not a.disabled),
             next(a for a in accounts.values() if not a.disabled),
         )
-        StateLog(paths).event("exec", chosen=first.name, reason="no_probe_data")
-        _emit_rows(dashboard_rows, chosen=first.name)
+        StateLog(paths).event("exec", chosen=first.name, reason="no_probe_data", group=group_name)
         fresh = _maybe_refresh(first, paths, reconciled=reconciled)
         if cfg.session_tracking:
             return exec_claude(
@@ -223,21 +224,22 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
             )
         return exec_claude(fresh, paths, claude_args)
 
-    # Non-pinned and disabled accounts stay in dashboard_rows so the user still
-    # sees them; only the selection pool narrows. Shared with status.py.
-    pool = selection_pool(resolved, accounts)
+    # Shared with status.py. ``accounts`` is already restricted; ``allowed`` keeps
+    # the two callers on the same rule.
+    pool = selection_pool(resolved, accounts, allowed=allowed)
 
     if not cfg.session_tracking:
         # Tracking disabled → exact pre-feature behaviour.
         best, wait_msg = pick_best(pool)
         wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
-        _emit_rows(dashboard_rows, chosen=best.account.name, wait_msg=wait_msg)
+        _print_wait(wait_msg, group)
         StateLog(paths).event(
             "exec",
             chosen=best.account.name,
             h5_pct=best.h5_pct,
             w7_pct=best.w7_pct,
             wait=wait_msg,
+            group=group_name,
         )
         fresh = _maybe_refresh(best.account, paths, reconciled=reconciled)
         return exec_claude(fresh, paths, claude_args)
@@ -261,16 +263,23 @@ def execute(paths: Paths, claude_args: list[str]) -> int:
         # own pid dies with the failed run, so the next count_load reaps it.
 
     wait_msg = _rewrite_pinned_wait(wait_msg, pinned_names, best, enabled_resolved)
-    _emit_rows(dashboard_rows, chosen=best.account.name, wait_msg=wait_msg)
+    _print_wait(wait_msg, group)
     StateLog(paths).event(
         "exec",
         chosen=best.account.name,
         h5_pct=best.h5_pct,
         w7_pct=best.w7_pct,
         wait=wait_msg,
+        group=group_name,
     )
     fresh = _maybe_refresh(best.account, paths, reconciled=reconciled)
     return exec_claude(fresh, paths, claude_args, session_uuid=run_uuid)
+
+
+def _print_wait(wait_msg: str | None, group: Group | None) -> None:
+    if wait_msg:
+        prefix = f"group {group.name}: " if group else ""
+        print(f"  ⏳ {prefix}{wait_msg}", file=sys.stderr)
 
 
 def _print_no_accounts_message() -> None:
@@ -304,34 +313,36 @@ def _print_all_disabled_message() -> None:
     )
 
 
-def _to_probe_result(c: Candidate) -> ProbeResult:
-    return ProbeResult(
-        ok=True,
-        http_code=200,
-        h5_pct=c.h5_pct,
-        w7_pct=c.w7_pct,
-        h5_reset_secs=c.h5_reset_secs,
-        w7_reset_secs=c.w7_reset_secs,
-        w7_opus_pct=c.w7_opus_pct,
-        w7_scoped=c.w7_scoped,
+def _print_groups_need_isolation_message() -> None:
+    print("", file=sys.stderr)
+    print(
+        "  Account groups are bound to directories, which needs session isolation —\n"
+        "  without it every session shares one credentials file and a launch here\n"
+        "  would switch all other running sessions to this directory's account.",
+        file=sys.stderr,
+    )
+    print(
+        "\n  Turn it on:  claude-rotate config set session_isolation true\n"
+        "  (or unset CLAUDE_ROTATE_SESSION_ISOLATION=0 if the environment forces it off)\n",
+        file=sys.stderr,
     )
 
 
-def _emit_rows(
-    rows: list[DashboardRow],
-    *,
-    chosen: str | None,
-    wait_msg: str | None = None,
-) -> None:
-    console = Console(file=sys.stderr)
-    if not console.is_terminal:
-        # Non-TTY: one-liner only
-        for row in rows:
-            if row.account.name == chosen:
-                console.print(compact_one_liner(row))
-                return
+def _print_nothing_allowed_message(group: Group | None) -> None:
+    print("", file=sys.stderr)
+    if group is not None:
+        print(
+            f"  Group {group.name!r} is bound to this directory but has no enabled account.",
+            file=sys.stderr,
+        )
+        print(
+            f"\n  Add one:     claude-rotate group add {group.name} <account>"
+            "\n  or enable:   claude-rotate enable <account>\n",
+            file=sys.stderr,
+        )
         return
-    render_dashboard(rows, chosen=chosen, console=console, show_forecast=forecast_enabled())
-    render_stale_footer(rows, console=console)
-    if wait_msg:
-        console.print(f"  [yellow]⏳ {wait_msg}[/]")
+    print(
+        "  Every enabled account is reserved for other directories — none may run here.",
+        file=sys.stderr,
+    )
+    print("\n  See the bindings: claude-rotate group list\n", file=sys.stderr)

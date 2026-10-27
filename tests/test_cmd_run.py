@@ -1,14 +1,17 @@
 # tests/test_cmd_run.py
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from claude_rotate.accounts import Account, Store
 from claude_rotate.commands.run import execute
 from claude_rotate.config import Paths
+from claude_rotate.groups import Group
 from claude_rotate.selection import Candidate
+from claude_rotate.settings import RotateConfig, save_config
 
 
 def _paths(tmp_path: Path) -> Paths:
@@ -124,11 +127,11 @@ def test_run_hints_legacy_credentials(tmp_path, monkeypatch, capsys) -> None:
 
 
 def test_run_honours_pin(tmp_path) -> None:
-    """Pin restricts the selection pool, not the dashboard.
+    """Pin restricts the selection pool, not the probing.
 
-    All accounts are probed (so the user sees the complete picture) but
-    ``exec_claude`` is called with the pinned account's token regardless
-    of whether a non-pinned account would score better.
+    All allowed accounts are probed, but ``exec_claude`` is called with the
+    pinned account's token regardless of whether a non-pinned account would
+    score better.
     """
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)
@@ -165,7 +168,7 @@ def test_run_honours_pin(tmp_path) -> None:
         patch("claude_rotate.commands.run.exec_claude") as mock_exec,
     ):
         execute(p, [])
-    # Both accounts were probed — dashboard shows the full picture
+    # Both accounts were probed
     probed = probe.call_args[0][0]
     assert sorted(x.name for x in probed) == ["a", "b"]
     # But selection respected the pin → exec'd with the pinned Account
@@ -213,7 +216,7 @@ def test_run_excludes_disabled_account(tmp_path) -> None:
         patch("claude_rotate.commands.run.exec_claude") as mock_exec,
     ):
         execute(p, [])
-    # Both accounts were probed — the dashboard shows the full picture
+    # Both accounts were probed
     probed = probe.call_args[0][0]
     assert sorted(x.name for x in probed) == ["a", "b"]
     # But selection excluded the disabled account
@@ -380,3 +383,183 @@ def test_run_tracking_disabled_writes_no_record(tmp_path) -> None:
 
     assert sessions.read_records(p) == []
     assert "session_uuid" not in mock_exec.call_args.kwargs
+
+
+# --- account groups: allowed set, guards, silent launch ----------------------
+
+
+def _grouped_run(
+    monkeypatch,
+    tmp_path: Path,
+    accounts: dict[str, Account],
+    groups: dict[str, Group],
+    *,
+    cwd: str,
+    isolation: bool = True,
+    quota: dict[str, float | None] | None = None,
+    probe_errors: dict[str, str] | None = None,
+) -> tuple[int, MagicMock, MagicMock]:
+    """Run ``execute`` in ``tmp_path/cwd``; return (rc, probe_many mock, exec_claude mock).
+
+    ``quota`` maps an account name to its 5h/7d percentage (default 10); ``None``
+    makes that probe return no data. ``probe_errors`` overrides the probe error.
+    """
+    monkeypatch.delenv("CLAUDE_ROTATE_SESSION_ISOLATION", raising=False)
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    p.state_dir.mkdir(parents=True)
+    Store(p).save(accounts)
+    save_config(p, RotateConfig(session_isolation=isolation, groups=groups))
+    (tmp_path / cwd).mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(tmp_path / cwd)
+    quota = quota or {}
+    probe_errors = probe_errors or {}
+
+    def probe(accs: list[Account]) -> list[Candidate]:
+        out = []
+        for a in accs:
+            pct = quota.get(a.name, 10.0)
+            out.append(
+                Candidate(
+                    account=a,
+                    h5_pct=pct,
+                    w7_pct=pct,
+                    h5_reset_secs=3600,
+                    w7_reset_secs=86400,
+                    probe_error=probe_errors.get(a.name, "" if pct is not None else "network"),
+                )
+            )
+        return out
+
+    with (
+        patch("claude_rotate.commands.run.refresh_stale_accounts"),
+        patch("claude_rotate.commands.run.refresh_stale_tokens", return_value=False),
+        patch("claude_rotate.sync.reconcile_isolated"),
+        patch("claude_rotate.commands.run.reconcile_all"),
+        patch("claude_rotate.commands.run.probe_many", side_effect=probe) as probe_mock,
+        patch("claude_rotate.commands.run.ensure_fresh", side_effect=lambda a, _p: a),
+        patch("claude_rotate.commands.run.exec_claude") as exec_mock,
+    ):
+        rc = execute(p, [])
+    return rc, probe_mock, exec_mock
+
+
+def _bound(tmp_path: Path, *accounts: str) -> dict[str, Group]:
+    return {"k": Group("k", accounts, (str(tmp_path.resolve() / "bound"),))}
+
+
+def test_run_in_bound_dir_only_probes_and_picks_group(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b")}
+    _, probe, exec_mock = _grouped_run(
+        monkeypatch, tmp_path, accounts, _bound(tmp_path, "a"), cwd="bound/repo"
+    )
+    assert [x.name for x in probe.call_args[0][0]] == ["a"]
+    assert exec_mock.call_args[0][0].name == "a"
+
+
+def test_run_outside_bound_dir_never_picks_reserved(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b")}
+    # a is fresher, but reserved for the bound directory
+    _, probe, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        _bound(tmp_path, "a"),
+        cwd="elsewhere",
+        quota={"a": 1.0, "b": 50.0},
+    )
+    assert [x.name for x in probe.call_args[0][0]] == ["b"]
+    assert exec_mock.call_args[0][0].name == "b"
+
+
+def test_run_pinned_outside_group_is_ignored(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": replace(_acc("b"), pinned=True)}
+    _, _, exec_mock = _grouped_run(
+        monkeypatch, tmp_path, accounts, _bound(tmp_path, "a"), cwd="bound"
+    )
+    assert exec_mock.call_args[0][0].name == "a"
+
+
+def test_run_no_probe_data_fallback_stays_in_group(monkeypatch, tmp_path) -> None:
+    accounts = {"a": _acc("a"), "b": replace(_acc("b"), pinned=True)}
+    _, _, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        _bound(tmp_path, "a"),
+        cwd="bound",
+        quota={"a": None, "b": None},
+    )
+    assert exec_mock.call_args[0][0].name == "a"
+
+
+def test_run_refuses_when_group_has_no_enabled_account(monkeypatch, tmp_path, capsys) -> None:
+    accounts = {"a": replace(_acc("a"), disabled=True), "b": _acc("b")}
+    rc, probe, exec_mock = _grouped_run(
+        monkeypatch, tmp_path, accounts, _bound(tmp_path, "a"), cwd="bound"
+    )
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "k" in err and "group add" in err
+    probe.assert_not_called()
+    exec_mock.assert_not_called()
+
+
+def test_run_refuses_when_all_reserved(monkeypatch, tmp_path, capsys) -> None:
+    rc, _, exec_mock = _grouped_run(
+        monkeypatch, tmp_path, {"a": _acc("a")}, _bound(tmp_path, "a"), cwd="elsewhere"
+    )
+    assert rc == 3
+    assert "reserved" in capsys.readouterr().err
+    exec_mock.assert_not_called()
+
+
+def test_run_refuses_bound_groups_without_isolation(monkeypatch, tmp_path, capsys) -> None:
+    rc, probe, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        {"a": _acc("a")},
+        _bound(tmp_path, "a"),
+        cwd="bound",
+        isolation=False,
+    )
+    assert rc == 3
+    err = capsys.readouterr().err
+    assert "session_isolation" in err and "CLAUDE_ROTATE_SESSION_ISOLATION" in err
+    probe.assert_not_called()
+    exec_mock.assert_not_called()
+
+
+def test_run_is_silent_on_success(monkeypatch, tmp_path, capsys) -> None:
+    _grouped_run(monkeypatch, tmp_path, {"a": _acc("a"), "b": _acc("b")}, {}, cwd="anywhere")
+    assert capsys.readouterr().err == ""
+
+
+def test_run_prints_wait_line_when_group_exhausted(monkeypatch, tmp_path, capsys) -> None:
+    accounts = {"a": _acc("a"), "b": _acc("b")}
+    _, _, exec_mock = _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        _bound(tmp_path, "a"),
+        cwd="bound",
+        quota={"a": 100.0},
+    )
+    err = capsys.readouterr().err
+    assert "⏳" in err and "group k" in err
+    assert exec_mock.call_args[0][0].name == "a"  # no fallback to other accounts
+
+
+def test_run_warns_about_unauthorized_allowed_account(monkeypatch, tmp_path, capsys) -> None:
+    accounts = {"a": replace(_acc("a"), email="a@example.com"), "b": _acc("b")}
+    _grouped_run(
+        monkeypatch,
+        tmp_path,
+        accounts,
+        {},
+        cwd="anywhere",
+        quota={"a": None},
+        probe_errors={"a": "unauthorized"},
+    )
+    err = capsys.readouterr().err
+    assert "a: token invalid" in err and "claude-rotate login a@example.com a" in err

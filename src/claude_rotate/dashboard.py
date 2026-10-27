@@ -57,7 +57,6 @@ from claude_rotate.sessions import SessionLoad
 __all__ = [
     "DashboardRow",
     "attach_forecast_rates",
-    "compact_one_liner",
     "fmt_sub_expiry",
     "forecast_enabled",
     "gradient_bar",
@@ -945,7 +944,7 @@ def _render_action_footer(
 
 
 # ---------------------------------------------------------------------------
-# Stale-metadata footer, compact non-TTY one-liner, status JSON
+# Stale-metadata footer, status JSON
 # ---------------------------------------------------------------------------
 
 
@@ -980,14 +979,6 @@ def render_stale_footer(
             " — refresh_token may be invalidated soon."
         )
     console.print("      Run any [bold]claude-rotate[/] command to trigger auto-refresh.")
-
-
-def compact_one_liner(row: DashboardRow) -> str:
-    """Single-line stderr summary for non-TTY runs."""
-    plan_label = row.account.plan
-    h5 = f"{row.h5_pct:g}%" if row.h5_pct is not None else "N/A"
-    w7 = f"{row.w7_pct:g}%" if row.w7_pct is not None else "N/A"
-    return f"→ {row.account.name} ({plan_label}, 5h {h5}, w7 {w7})"
 
 
 def status_json(

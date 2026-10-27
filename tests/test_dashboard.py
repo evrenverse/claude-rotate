@@ -192,18 +192,6 @@ def test_render_shows_subscription_expiry_in_days() -> None:
     assert "5d" in out or "5 d" in out
 
 
-def test_compact_one_liner_format() -> None:
-    from claude_rotate.dashboard import compact_one_liner
-
-    a = _acc("main")
-    row = _row(a, h5_pct=6.0, w7_pct=85.0)
-    s = compact_one_liner(row)
-    assert "main" in s.lower() or "Main" in s
-    assert "Max-20" in s or "max_20x" in s
-    assert "6%" in s
-    assert "85%" in s
-
-
 def test_status_json_includes_all_relevant_fields() -> None:
     from claude_rotate.dashboard import status_json
 

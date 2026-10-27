@@ -31,6 +31,8 @@ The dashboard sorts accounts by subscription expiry (soonest first) and adapts t
 
 Each account renders a **fact line** per window (usage bar, current %, reset clock + countdown). When a window will cross 100% *before* it resets at the current burn rate, a dimmed **ETA sub-line** (`→100%`) shows the clock at which that happens (red under an hour away — see `alt`'s weekly); windows that reset first get no sub-line. Forecasts drop once a window is already at/over 100% (see `alt`'s 5h, where you're at the wall). A footer flags accounts that need action — a re-login or a soon-expiring subscription. Hide all forecasts with `CLAUDE_ROTATE_FORECAST=0`.
 
+This dashboard is what `claude-rotate status` prints. Launching (`claude` / `claude-rotate run`) is silent: it prints a line to stderr only when every allowed account is exhausted (the wait message) or an account needs a re-login.
+
 Built for developers and AI agents that burn through a single Max plan before lunch and want to keep working against Claude Code without hitting the 5-hour wall.
 
 > **Keywords:** claude code rotator · multi-account claude · claude max rotation · anthropic oauth · claude rate-limit workaround · claude subscription manager · claude-code cli
@@ -88,7 +90,7 @@ Each `login` opens a browser tab against `claude.com/cai/oauth/authorize`, runs 
 
 | Command | What it does |
 |---|---|
-| `claude-rotate run [args…]` | Picks best account, exec `claude` (default when no command given) |
+| `claude-rotate run [args…]` | Picks best account, exec `claude` (default when no command given). Silent apart from wait / re-login warnings |
 | `claude-rotate login <email> [<handle>]` | Add or re-login an account (interactive OAuth PKCE) |
 | `claude-rotate login <email> <handle> --replace` | Overwrite an existing account |
 | `claude-rotate login <email> <handle> --from-env` / `--token-file <path>` | Headless login (no browser) from `CLAUDE_ROTATE_TOKEN` / a token file — grants inference-only scope |
@@ -175,7 +177,7 @@ The rules:
 - **The directory beats a pin.** `pin` and `disable` keep working, but only among the allowed accounts; a pinned account outside them is ignored.
 - If the group is exhausted there is **no fallback** to other accounts — you get the usual wait message.
 - **Git worktrees count as their repository**, wherever they live (`<repo>/.claude/worktrees/…` or elsewhere), and symlinked directories are resolved before comparing.
-- **Binding needs [session isolation](#session-isolation-optional).** Without it every running session shares one credentials file, so a launch in a bound directory would switch all other sessions to a reserved account. `group bind` refuses while isolation is off, and `config set session_isolation false` refuses while a group is bound.
+- **Binding needs [session isolation](#session-isolation-optional).** Without it every running session shares one credentials file, so a launch in a bound directory would switch all other sessions to a reserved account. `group bind` refuses while isolation is off, and `config set session_isolation false` refuses while a group is bound. If isolation ends up off anyway (hand-edited config, `CLAUDE_ROTATE_SESSION_ISOLATION=0`), `run` refuses to launch.
 
 `rename` and `remove` keep group membership in step.
 

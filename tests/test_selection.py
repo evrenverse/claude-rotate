@@ -11,6 +11,7 @@ from claude_rotate.selection import (
     next_available_seconds,
     pick_best,
     plan_rank,
+    selection_pool,
 )
 
 
@@ -509,3 +510,20 @@ def test_tier2_soon_exception_still_picks_expiring_with_capacity() -> None:
     fresh_high_week = _cand(plan="max_20x", expires_days=None, h5=2.0, w7=90.0)
     best, _ = pick_best([soon_ok, fresh_high_week], now=FIXED_NOW)
     assert best is soon_ok
+
+
+def _named(name: str, *, pinned: bool = False) -> Candidate:
+    c = _cand()
+    return replace(c, account=replace(_acc(name), pinned=pinned))
+
+
+def test_selection_pool_allowed_beats_pin() -> None:
+    a, b = _named("a", pinned=True), _named("b")
+    pool = selection_pool([a, b], {"a": a.account, "b": b.account}, allowed={"b"})
+    assert [c.account.name for c in pool] == ["b"]
+
+
+def test_selection_pool_allowed_none_is_unrestricted() -> None:
+    a, b = _named("a"), _named("b")
+    pool = selection_pool([a, b], {"a": a.account, "b": b.account}, allowed=None)
+    assert [c.account.name for c in pool] == ["a", "b"]

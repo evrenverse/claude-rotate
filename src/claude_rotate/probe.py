@@ -224,6 +224,20 @@ def _probe_one(account: Account) -> tuple[Account, ProbeResult]:
     return account, merge_opus_usage(base, fetch_oauth_usage(account.runtime_token))
 
 
+def probe_result_of(c: Candidate) -> ProbeResult:
+    """Inverse of ``probe_many``'s success branch, for writing a live probe to the cache."""
+    return ProbeResult(
+        ok=True,
+        http_code=200,
+        h5_pct=c.h5_pct,
+        w7_pct=c.w7_pct,
+        h5_reset_secs=c.h5_reset_secs,
+        w7_reset_secs=c.w7_reset_secs,
+        w7_opus_pct=c.w7_opus_pct,
+        w7_scoped=c.w7_scoped,
+    )
+
+
 def probe_many(accounts: list[Account]) -> list[Candidate]:
     """Probe every account's quota in parallel.
 
