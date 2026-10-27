@@ -49,7 +49,7 @@ Commands:
   disable      Exclude an account from rotation (manual, reversible)
   enable       Re-include a disabled account in rotation
   group        Group accounts and bind groups to directories
-  status      Show the quota dashboard
+  status       Show the quota dashboard
   doctor       Self-check: binary, config, network
   set-expiry   Override subscription end date manually
   cleanup      Delete all claude-rotate state (accounts, cache, logs)

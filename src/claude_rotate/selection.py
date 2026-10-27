@@ -163,8 +163,9 @@ def selection_pool(
     dropped outright — never auto-picked, not even as a last resort. Pinning
     then restricts what remains, unless every pinned account failed its probe,
     in which case the enabled set is used so a dead pin cannot strand the
-    launch. Callers keep rendering the full row set, so excluded accounts stay
-    visible on the dashboard.
+    launch. ``status`` keeps rendering the full row set, so excluded accounts stay
+    visible on the dashboard; ``run`` restricts its account set up front, so only
+    allowed accounts ever reach this function.
 
     ``run`` and ``status`` must agree here or the dashboard's ``>`` marker
     would point at an account ``run`` would not actually pick.

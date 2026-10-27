@@ -70,7 +70,9 @@ def _linked_worktree_main(git_file: Path, root: Path, p: Path) -> Path | None:
         return None  # submodule: no commondir, nothing to map
     common = (gitdir / commondir.read_text().strip()).resolve()
     if common.name != ".git":
-        return None  # bare or separate-git-dir repo: no main worktree to map to
+        # shortcut: bare / separate-git-dir repos have no main worktree to map to, so their
+        # worktrees match no group; map them via the common dir once someone needs that layout.
+        return None
     return common.parent / p.relative_to(root)
 
 
