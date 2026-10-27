@@ -1056,6 +1056,21 @@ def test_status_exit_code_2_when_the_allowed_set_is_exhausted(tmp_path, monkeypa
     assert status.execute(p, as_json=False, session_dir=bound) == 2
 
 
+def test_status_exit_code_2_when_the_allowed_accounts_are_all_disabled(
+    tmp_path, monkeypatch
+) -> None:
+    """``run`` refuses such a group (exit 3); ``status`` must not report it healthy."""
+    from dataclasses import replace
+
+    from claude_rotate.commands import status
+
+    p, bound = _grouped_status(monkeypatch, tmp_path)
+    Store(p).save({"a": replace(_acc("a"), disabled=True), "b": _acc("b")})
+    assert status.execute(p, as_json=False, session_dir=bound) == 2
+    # Anywhere else the enabled b is allowed and healthy.
+    assert status.execute(p, as_json=False, session_dir=tmp_path / "other") == 0
+
+
 def test_status_dir_missing_is_error(tmp_path, monkeypatch, capsys) -> None:
     from claude_rotate.commands import status
 
@@ -1212,6 +1227,25 @@ def test_status_tty_without_accounts_skips_cached(tmp_path, monkeypatch, capsys)
     # Only the one-line "Probing…" erase: there is no cached frame to rewind over.
     assert [m.group(1) for m in _REDRAW.finditer(buf.getvalue())] == ["1"]
     assert "No accounts configured" in capsys.readouterr().err
+
+
+def test_status_dumb_terminal_skips_cached_frame(tmp_path, monkeypatch) -> None:
+    """A dumb terminal cannot rewind: no cached frame and no cursor escapes."""
+    from rich.console import Console
+
+    from claude_rotate.commands import status
+
+    p, buf, probes = _tty_status(monkeypatch, tmp_path, height=80)
+    monkeypatch.setenv("TERM", "dumb")
+    monkeypatch.setattr(
+        "claude_rotate.commands.status._console",
+        lambda: Console(file=buf, force_terminal=True, width=140, height=80),
+    )
+    assert status.execute(p, as_json=False) == 0
+    out = buf.getvalue()
+    assert "\x1b[" not in out
+    assert "12%" not in out and "55%" in out
+    assert probes == [""]  # nothing was on screen while probing
 
 
 def test_status_json_never_uses_cached_frame(tmp_path, monkeypatch, capsys) -> None:

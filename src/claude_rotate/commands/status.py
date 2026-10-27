@@ -247,7 +247,10 @@ def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collect
         chosen=chosen,
         active=active,
         relogin_count=relogin_count,
-        has_usable=any(is_usable(c) for c in resolved if c.account.name in allowed),
+        # Same rule as ``run``: a disabled account never launches, so it is not usable here.
+        has_usable=any(
+            is_usable(c) for c in resolved if c.account.name in allowed and not c.account.disabled
+        ),
         session_dir=here,
         group=group_name,
         groups=cfg.groups,
@@ -385,7 +388,8 @@ def execute(
             here=here,
         )
 
-    if console.is_terminal and not as_json and not report:
+    # The cached frame is rewound with raw cursor escapes, which a dumb terminal prints verbatim.
+    if console.is_terminal and not console.is_dumb_terminal and not as_json and not report:
         collected = _collect_with_cached_frame(paths, here, console)
     else:
         collected = _collect(paths, here)
