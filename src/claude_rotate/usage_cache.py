@@ -107,6 +107,11 @@ class UsageCache:
             scoped.append(s)
         return tuple(scoped)
 
+    def probed_at(self, name: str) -> float | None:
+        """When a probe last wrote this account's entry; ``None`` without one."""
+        raw = self._read_raw(name)
+        return float(raw["probed_at"]) if raw is not None and "probed_at" in raw else None
+
     def load(self, name: str) -> ProbeResult | None:
         raw = self._read_raw(name)
         if raw is None:

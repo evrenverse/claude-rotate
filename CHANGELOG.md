@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   appears when bound groups lack session isolation. The table and the narrow cards now
   fill the terminal width instead of capping the bars. Model-scoped limits (e.g.
   `fable`) are hidden while at ~0 % (`--json` still lists them).
+- **`status` draws instantly from cache.** On a terminal it shows the cached
+  dashboard at once (`cached 3m ago` in the status line), probes live, and then
+  redraws in place; accounts without a cache entry read `no data` until then. A
+  dashboard taller than the terminal shows a one-line `Probing accounts…` instead.
+  `--json`, `--report`, `--watch` and piped output stay live-only.
 
 ## [0.8.1] - 2026-10-23
 

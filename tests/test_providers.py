@@ -222,6 +222,26 @@ class TestCollect:
 
         assert [q.account for q in quotas] == ["first"]
 
+    def test_cached_never_runs_a_reader(
+        self, rotate_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The instant first frame must not wait on agy: valid cache or nothing."""
+        paths = self._paths(rotate_dir)
+
+        def boom(now: float) -> list[ProviderQuota]:
+            raise AssertionError("cached() must not read live")
+
+        monkeypatch.setattr(providers, "_READERS", (boom,))
+        assert providers.cached(paths, now=NOW) == []
+
+        monkeypatch.setattr(
+            providers, "_READERS", (lambda now: [ProviderQuota(provider="a", account="a")],)
+        )
+        providers.collect(paths, now=NOW)
+        monkeypatch.setattr(providers, "_READERS", (boom,))
+        assert [q.provider for q in providers.cached(paths, now=NOW + 30)] == ["a"]
+        assert providers.cached(paths, now=NOW + providers.CACHE_TTL_SECONDS + 1) == []
+
     def test_refetches_once_the_cache_has_expired(
         self, rotate_dir: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

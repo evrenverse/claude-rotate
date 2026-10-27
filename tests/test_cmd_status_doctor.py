@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import io
 import json
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -1104,3 +1106,131 @@ def test_status_dashboard_shows_group_boxes_context_and_isolation_warning(
     assert "Account groups need session isolation" in render(
         replace(collected, isolation_missing=True)
     )
+
+
+# --- status speed: instant cached frame, in-place live redraw ----------------
+
+_REDRAW = re.compile(r"\x1b\[(\d+)F\x1b\[J")
+
+
+def _tty_status(monkeypatch, tmp_path: Path, *, height: int):
+    """One account cached at 12 %, probing live at 55 %; stderr is a ``height``-row terminal."""
+    from rich.console import Console
+
+    from claude_rotate.probe import ProbeResult
+    from claude_rotate.selection import Candidate
+    from claude_rotate.usage_cache import UsageCache
+
+    p = _paths(tmp_path)
+    p.config_dir.mkdir(parents=True)
+    Store(p).save({"a": _acc("a")})
+    UsageCache(p).save(
+        "a",
+        ProbeResult(
+            ok=True,
+            http_code=200,
+            h5_pct=12.0,
+            w7_pct=12.0,
+            h5_reset_secs=3600,
+            w7_reset_secs=86400,
+        ),
+    )
+    calls: list[int] = []
+
+    def probe(accts):
+        calls.append(len(accts))
+        return [
+            Candidate(account=a, h5_pct=55.0, w7_pct=55.0, h5_reset_secs=3600, w7_reset_secs=86400)
+            for a in accts
+        ]
+
+    buf = io.StringIO()
+    monkeypatch.setattr("claude_rotate.commands.status.probe_many", probe)
+    monkeypatch.setattr(
+        "claude_rotate.commands.status._console",
+        lambda: Console(file=buf, force_terminal=True, width=140, height=height),
+    )
+    return p, buf, calls
+
+
+def test_status_tty_draws_cached_then_live(tmp_path, monkeypatch) -> None:
+    from claude_rotate.commands import status
+
+    p, buf, calls = _tty_status(monkeypatch, tmp_path, height=80)
+    assert status.execute(p, as_json=False) == 0
+    out = buf.getvalue()
+    redraw = _REDRAW.search(out)
+    assert redraw is not None
+    assert out.index("12%") < redraw.start() < out.rindex("55%")
+    assert "12%" not in out[redraw.end() :]
+    assert "cached 0m ago" in out[: redraw.start()]
+    # The erase rewinds exactly over the cached frame.
+    assert int(redraw.group(1)) == out[: redraw.start()].count("\n")
+    assert calls == [1]
+
+
+def test_status_tty_tall_frame_skips_cached(tmp_path, monkeypatch) -> None:
+    from claude_rotate.commands import status
+
+    p, buf, calls = _tty_status(monkeypatch, tmp_path, height=5)
+    assert status.execute(p, as_json=False) == 0
+    out = buf.getvalue()
+    assert "12%" not in out
+    assert "55%" in out
+    assert out.index("Probing") < out.index("\x1b[1F\x1b[J") < out.index("55%")
+    assert calls == [1]
+
+
+def test_status_tty_without_accounts_skips_cached(tmp_path, monkeypatch, capsys) -> None:
+    from claude_rotate.commands import status
+
+    p, buf, _ = _tty_status(monkeypatch, tmp_path, height=80)
+    Store(p).save({})
+    assert status.execute(p, as_json=False) == 3
+    # Only the one-line "Probing…" erase: there is no cached frame to rewind over.
+    assert [m.group(1) for m in _REDRAW.finditer(buf.getvalue())] == ["1"]
+    assert "No accounts configured" in capsys.readouterr().err
+
+
+def test_status_json_never_uses_cached_frame(tmp_path, monkeypatch, capsys) -> None:
+    from claude_rotate.commands import status
+
+    p, buf, calls = _tty_status(monkeypatch, tmp_path, height=80)
+    assert status.execute(p, as_json=True) == 0
+    assert calls == [1]
+    assert buf.getvalue() == ""
+    out = capsys.readouterr().out
+    assert "\x1b" not in out
+    assert json.loads(out)["accounts"][0]["h5_pct"] == 55.0
+
+
+def test_collect_cached_only_never_probes_or_writes(tmp_path, monkeypatch) -> None:
+    import time
+
+    from claude_rotate.commands import status
+    from claude_rotate.usage_cache import UsageCache
+
+    p, _, calls = _tty_status(monkeypatch, tmp_path, height=80)
+    Store(p).save({"a": _acc("a"), "b": _acc("b")})  # b has no cache entry
+
+    def snapshot() -> dict[str, bytes]:
+        return {f.name: f.read_bytes() for f in p.usage_dir.iterdir()}
+
+    before = snapshot()
+    monkeypatch.setattr(
+        "claude_rotate.commands.status.refresh_stale_accounts",
+        lambda _p: (_ for _ in ()).throw(AssertionError("no metadata refresh in cached_only")),
+    )
+    probed_at = UsageCache(p).probed_at("a")
+    assert probed_at is not None
+
+    c = status._collect(p, tmp_path, cached_only=True)
+
+    assert calls == []
+    assert snapshot() == before  # nothing written: no entry for b, a untouched, no history
+    rows = {r.account.name: r for r in c.rows}
+    assert rows["a"].h5_pct == 12.0 and rows["a"].from_cache
+    assert rows["b"].status == "no_data" and rows["b"].note == "no cached data yet"
+    assert c.relogin_count == 0  # "cached" is not a dead token
+    assert c.cache_age_secs is not None
+    assert abs(c.cache_age_secs - (time.time() - probed_at)) < 5

@@ -364,3 +364,12 @@ def test_save_preserves_fetch_age_across_repeated_failed_fetches(
     assert cache.load_scoped("main") == (
         ScopedLimit(label="fable", pct=57.0, reset_secs=86400 - 9_000, stale=True, age_secs=9_000),
     )
+
+
+def test_usage_cache_probed_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    assert cache.probed_at("main") is None
+    cache.save("main", _probe())
+    assert cache.probed_at("main") == 1_000.0
+    assert cache.probed_at("unknown") is None

@@ -81,6 +81,11 @@ def collect(paths: Paths, *, now: float | None = None) -> list[ProviderQuota]:
     return quotas
 
 
+def cached(paths: Paths, *, now: float | None = None) -> list[ProviderQuota]:
+    """The valid cache or nothing — never runs a reader, so it cannot wait on agy."""
+    return _read_cache(paths, time.time() if now is None else now) or []
+
+
 def _safely(reader: Any, now: float) -> list[ProviderQuota]:
     try:
         return list(reader(now))

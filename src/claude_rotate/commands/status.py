@@ -50,12 +50,14 @@ from claude_rotate.groups import (
     matching_group,
     session_path,
 )
+from claude_rotate.insights import rel_duration
 from claude_rotate.metadata import refresh_stale_accounts
 from claude_rotate.probe import probe_many, probe_result_of
 from claude_rotate.providers import ProviderQuota
+from claude_rotate.providers import cached as cached_providers
 from claude_rotate.providers import collect as collect_providers
 from claude_rotate.report import build_report
-from claude_rotate.selection import is_usable, pick_best, selection_pool
+from claude_rotate.selection import candidate_from_account, is_usable, pick_best, selection_pool
 from claude_rotate.settings import load_config
 from claude_rotate.sync import read_current_session
 from claude_rotate.usage_cache import UsageCache
@@ -99,7 +101,7 @@ class _Collected:
         return 0
 
 
-def _collect(paths: Paths, here: Path) -> _Collected:
+def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collected:
     """Probe every account and resolve the dashboard rows + chosen/active markers.
 
     ``here`` is the ``session_path``-resolved directory the snapshot is evaluated
@@ -109,10 +111,15 @@ def _collect(paths: Paths, here: Path) -> _Collected:
     This is the slow part (live probes + best-effort metadata refresh); the
     ``--watch`` loop calls it once per cycle while the previous frame stays on
     screen, so the redraw afterwards is flicker-free.
+
+    ``cached_only`` is the instant first frame: no metadata refresh, no probes and
+    no cache writes — every row comes from the usage cache (``no data`` without an
+    entry) and ``cache_age_secs`` says how old the oldest entry is.
     """
-    # Best-effort metadata refresh (same as run does)
-    with contextlib.suppress(Exception):
-        refresh_stale_accounts(paths)
+    if not cached_only:
+        # Best-effort metadata refresh (same as run does)
+        with contextlib.suppress(Exception):
+            refresh_stale_accounts(paths)
 
     cfg = load_config(paths)
     group = matching_group(cfg.groups, here)
@@ -134,13 +141,23 @@ def _collect(paths: Paths, here: Path) -> _Collected:
         )
     allowed = allowed_accounts(cfg.groups, accounts, here)
 
-    # The third-party readers run alongside the probes rather than after them:
-    # agy needs a few seconds, and that should overlap the probes, not follow.
-    with ThreadPoolExecutor(max_workers=1) as providers_pool:
-        provider_future = providers_pool.submit(_providers_or_empty, paths)
-        candidates = probe_many(list(accounts.values()))
-        providers = provider_future.result()
     cache = UsageCache(paths)
+    cache_age_secs = None
+    if cached_only:
+        candidates = [
+            candidate_from_account(a, None, None, 0, 0, probe_error="cached")
+            for a in accounts.values()
+        ]
+        providers = cached_providers(paths)
+        stamps = [t for a in accounts if (t := cache.probed_at(a)) is not None]
+        cache_age_secs = int(time.time() - min(stamps)) if stamps else None
+    else:
+        # The third-party readers run alongside the probes rather than after them:
+        # agy needs a few seconds, and that should overlap the probes, not follow.
+        with ThreadPoolExecutor(max_workers=1) as providers_pool:
+            provider_future = providers_pool.submit(_providers_or_empty, paths)
+            candidates = probe_many(list(accounts.values()))
+            providers = provider_future.result()
 
     rows: list[DashboardRow] = []
     resolved = []
@@ -225,6 +242,7 @@ def _collect(paths: Paths, here: Path) -> _Collected:
         groups=cfg.groups,
         isolation_missing=isolation_missing,
         providers=providers,
+        cache_age_secs=cache_age_secs,
     )
 
 
@@ -254,6 +272,11 @@ def _render_dashboard(collected: _Collected, console: Console) -> None:
         show_forecast=show_forecast,
         sections=build_sections(collected.rows, collected.groups, collected.group),
         context=context,
+        cache_note=(
+            None
+            if collected.cache_age_secs is None
+            else f"cached {rel_duration(collected.cache_age_secs).strip('()')} ago"
+        ),
     )
     if collected.isolation_missing:
         line = Text(" ⚠ ", style="yellow")
@@ -266,6 +289,33 @@ def _render_dashboard(collected: _Collected, console: Console) -> None:
     # Pinned to the account table's width — the two are stacked, and the
     # forecast toggle covers both for the same reason.
     render_providers(collected.providers, console=console, width=width, show_forecast=show_forecast)
+
+
+def _console() -> Console:
+    return Console(file=sys.stderr)
+
+
+def _collect_with_cached_frame(paths: Paths, here: Path, console: Console) -> _Collected:
+    """Probe live while a cache-backed frame is already on screen, then erase it.
+
+    The caller draws the live frame in its place. A frame taller than the terminal
+    cannot be rewound reliably, so then only a one-line indicator is shown.
+    """
+    cached_frame = _collect(paths, here, cached_only=True)
+    with console.capture() as cap:
+        _render_dashboard(cached_frame, console)
+    text = cap.get()
+    lines = text.count("\n")
+    if not cached_frame.accounts_empty and lines < console.height:
+        console.file.write(text)
+        console.file.flush()
+        live = _collect(paths, here)
+        console.file.write(f"\x1b[{lines}F\x1b[J")  # back to the frame start, clear below
+    else:
+        console.print("  Probing accounts…", style="dim")
+        live = _collect(paths, here)
+        console.file.write("\x1b[1F\x1b[J")
+    return live
 
 
 def _no_accounts_hint() -> str:
@@ -306,7 +356,7 @@ def execute(
     watch: float | None = None,
     session_dir: Path | None = None,
 ) -> int:
-    console = Console(file=sys.stderr)
+    console = _console()
     here = _session_dir(session_dir)
     if here is None:
         print(f"error: no such directory: {session_dir}", file=sys.stderr)
@@ -324,7 +374,10 @@ def execute(
             here=here,
         )
 
-    collected = _collect(paths, here)
+    if console.is_terminal and not as_json and not report:
+        collected = _collect_with_cached_frame(paths, here, console)
+    else:
+        collected = _collect(paths, here)
     if collected.accounts_empty:
         print(_no_accounts_hint(), file=sys.stderr)
         return 3

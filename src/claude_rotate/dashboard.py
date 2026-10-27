@@ -234,6 +234,7 @@ NO_DATA_NOTES = {
     "upstream_error": "API 5xx — retry later",
     "timeout": "network error",
     "network_error": "network error",
+    "cached": "no cached data yet",  # the instant first frame of ``status``: nothing probed
 }
 
 
