@@ -373,3 +373,20 @@ def test_usage_cache_probed_at(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
     cache.save("main", _probe())
     assert cache.probed_at("main") == 1_000.0
     assert cache.probed_at("unknown") is None
+
+
+def test_load_max_age_none_ignores_the_staleness_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 1_000.0)
+    cache = UsageCache(make_paths(tmp_path))
+    cache.save("main", _probe(h5_reset_secs=6 * 3600))
+
+    monkeypatch.setattr(
+        time, "time", lambda: 1_000.0 + 2 * 3600
+    )  # past the 10 min cap, window open
+    assert cache.load("main") is None
+    old = cache.load("main", max_age=None)
+    assert old is not None
+    assert old.h5_pct == 5.0
+    assert old.h5_reset_secs == 4 * 3600  # still wound forward to now

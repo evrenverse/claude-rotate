@@ -1113,8 +1113,14 @@ def test_status_dashboard_shows_group_boxes_context_and_isolation_warning(
 _REDRAW = re.compile(r"\x1b\[(\d+)F\x1b\[J")
 
 
-def _tty_status(monkeypatch, tmp_path: Path, *, height: int):
-    """One account cached at 12 %, probing live at 55 %; stderr is a ``height``-row terminal."""
+def _tty_status(monkeypatch, tmp_path: Path, *, height: int, cached_ago: float = 0.0):
+    """One account cached at 12 %, probing live at 55 %; stderr is a ``height``-row terminal.
+
+    The cache entry is ``cached_ago`` seconds old. Returns ``(paths, console buffer, probes)``;
+    ``probes`` holds what was already on the console each time ``probe_many`` ran.
+    """
+    import time
+
     from rich.console import Console
 
     from claude_rotate.probe import ProbeResult
@@ -1124,39 +1130,42 @@ def _tty_status(monkeypatch, tmp_path: Path, *, height: int):
     p = _paths(tmp_path)
     p.config_dir.mkdir(parents=True)
     Store(p).save({"a": _acc("a")})
-    UsageCache(p).save(
-        "a",
-        ProbeResult(
-            ok=True,
-            http_code=200,
-            h5_pct=12.0,
-            w7_pct=12.0,
-            h5_reset_secs=3600,
-            w7_reset_secs=86400,
-        ),
-    )
-    calls: list[int] = []
+    saved_at = time.time() - cached_ago
+    with monkeypatch.context() as m:
+        m.setattr(time, "time", lambda: saved_at)
+        UsageCache(p).save(
+            "a",
+            ProbeResult(
+                ok=True,
+                http_code=200,
+                h5_pct=12.0,
+                w7_pct=12.0,
+                h5_reset_secs=6 * 3600,
+                w7_reset_secs=5 * 86400,
+            ),
+        )
+    buf = io.StringIO()
+    probes: list[str] = []
 
     def probe(accts):
-        calls.append(len(accts))
+        probes.append(buf.getvalue())
         return [
             Candidate(account=a, h5_pct=55.0, w7_pct=55.0, h5_reset_secs=3600, w7_reset_secs=86400)
             for a in accts
         ]
 
-    buf = io.StringIO()
     monkeypatch.setattr("claude_rotate.commands.status.probe_many", probe)
     monkeypatch.setattr(
         "claude_rotate.commands.status._console",
         lambda: Console(file=buf, force_terminal=True, width=140, height=height),
     )
-    return p, buf, calls
+    return p, buf, probes
 
 
 def test_status_tty_draws_cached_then_live(tmp_path, monkeypatch) -> None:
     from claude_rotate.commands import status
 
-    p, buf, calls = _tty_status(monkeypatch, tmp_path, height=80)
+    p, buf, probes = _tty_status(monkeypatch, tmp_path, height=80)
     assert status.execute(p, as_json=False) == 0
     out = buf.getvalue()
     redraw = _REDRAW.search(out)
@@ -1166,19 +1175,32 @@ def test_status_tty_draws_cached_then_live(tmp_path, monkeypatch) -> None:
     assert "cached 0m ago" in out[: redraw.start()]
     # The erase rewinds exactly over the cached frame.
     assert int(redraw.group(1)) == out[: redraw.start()].count("\n")
-    assert calls == [1]
+    # The cached frame is already on screen while the probes run.
+    assert len(probes) == 1
+    assert "12%" in probes[0] and "cached" in probes[0]
+
+
+def test_status_tty_first_frame_shows_a_two_hour_old_cache(tmp_path, monkeypatch) -> None:
+    """Old entries still fill the first frame (marked cached) instead of reading ``no data``."""
+    from claude_rotate.commands import status
+
+    p, buf, probes = _tty_status(monkeypatch, tmp_path, height=80, cached_ago=7200)
+    assert status.execute(p, as_json=False) == 0
+    assert "12%" in probes[0]
+    assert "cached 2h 0m ago" in probes[0]
+    assert "no cached data yet" not in buf.getvalue()
 
 
 def test_status_tty_tall_frame_skips_cached(tmp_path, monkeypatch) -> None:
     from claude_rotate.commands import status
 
-    p, buf, calls = _tty_status(monkeypatch, tmp_path, height=5)
+    p, buf, probes = _tty_status(monkeypatch, tmp_path, height=5)
     assert status.execute(p, as_json=False) == 0
     out = buf.getvalue()
     assert "12%" not in out
     assert "55%" in out
     assert out.index("Probing") < out.index("\x1b[1F\x1b[J") < out.index("55%")
-    assert calls == [1]
+    assert len(probes) == 1 and "Probing" in probes[0]
 
 
 def test_status_tty_without_accounts_skips_cached(tmp_path, monkeypatch, capsys) -> None:
@@ -1195,9 +1217,9 @@ def test_status_tty_without_accounts_skips_cached(tmp_path, monkeypatch, capsys)
 def test_status_json_never_uses_cached_frame(tmp_path, monkeypatch, capsys) -> None:
     from claude_rotate.commands import status
 
-    p, buf, calls = _tty_status(monkeypatch, tmp_path, height=80)
+    p, buf, probes = _tty_status(monkeypatch, tmp_path, height=80)
     assert status.execute(p, as_json=True) == 0
-    assert calls == [1]
+    assert probes == [""]
     assert buf.getvalue() == ""
     out = capsys.readouterr().out
     assert "\x1b" not in out
@@ -1210,7 +1232,7 @@ def test_collect_cached_only_never_probes_or_writes(tmp_path, monkeypatch) -> No
     from claude_rotate.commands import status
     from claude_rotate.usage_cache import UsageCache
 
-    p, _, calls = _tty_status(monkeypatch, tmp_path, height=80)
+    p, _, probes = _tty_status(monkeypatch, tmp_path, height=80)
     Store(p).save({"a": _acc("a"), "b": _acc("b")})  # b has no cache entry
 
     def snapshot() -> dict[str, bytes]:
@@ -1226,7 +1248,7 @@ def test_collect_cached_only_never_probes_or_writes(tmp_path, monkeypatch) -> No
 
     c = status._collect(p, tmp_path, cached_only=True)
 
-    assert calls == []
+    assert probes == []
     assert snapshot() == before  # nothing written: no entry for b, a untouched, no history
     rows = {r.account.name: r for r in c.rows}
     assert rows["a"].h5_pct == 12.0 and rows["a"].from_cache

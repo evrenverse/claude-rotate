@@ -112,7 +112,10 @@ class UsageCache:
         raw = self._read_raw(name)
         return float(raw["probed_at"]) if raw is not None and "probed_at" in raw else None
 
-    def load(self, name: str) -> ProbeResult | None:
+    def load(
+        self, name: str, *, max_age: float | None = MAX_CACHE_AGE_SECONDS
+    ) -> ProbeResult | None:
+        """The cached probe with reset clocks wound forward; ``max_age=None`` has no age cap."""
         raw = self._read_raw(name)
         if raw is None:
             return None
@@ -132,7 +135,7 @@ class UsageCache:
         # window. Once all windows have elapsed the usage has reset to zero,
         # so the entry is still valid (and will be returned with zeroed pcts).
         all_windows_elapsed = h5_secs == 0 and w7_secs == 0
-        if not all_windows_elapsed and now - probed_at > MAX_CACHE_AGE_SECONDS:
+        if not all_windows_elapsed and max_age is not None and now - probed_at > max_age:
             return None
 
         h5_pct = raw.get("h5_pct")

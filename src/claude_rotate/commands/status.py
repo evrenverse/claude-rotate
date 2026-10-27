@@ -52,7 +52,7 @@ from claude_rotate.groups import (
 )
 from claude_rotate.insights import rel_duration
 from claude_rotate.metadata import refresh_stale_accounts
-from claude_rotate.probe import probe_many, probe_result_of
+from claude_rotate.probe import ProbeResult, probe_many, probe_result_of
 from claude_rotate.providers import ProviderQuota
 from claude_rotate.providers import cached as cached_providers
 from claude_rotate.providers import collect as collect_providers
@@ -101,6 +101,16 @@ class _Collected:
         return 0
 
 
+class _UncappedCache:
+    """``row_from_cache`` source for the first frame: an old entry beats ``no data``."""
+
+    def __init__(self, cache: UsageCache) -> None:
+        self._cache = cache
+
+    def load(self, name: str) -> ProbeResult | None:
+        return self._cache.load(name, max_age=None)
+
+
 def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collected:
     """Probe every account and resolve the dashboard rows + chosen/active markers.
 
@@ -113,8 +123,8 @@ def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collect
     screen, so the redraw afterwards is flicker-free.
 
     ``cached_only`` is the instant first frame: no metadata refresh, no probes and
-    no cache writes — every row comes from the usage cache (``no data`` without an
-    entry) and ``cache_age_secs`` says how old the oldest entry is.
+    no cache writes — every row comes from the usage cache, however old (``no data``
+    without an entry), and ``cache_age_secs`` says how old the oldest entry is.
     """
     if not cached_only:
         # Best-effort metadata refresh (same as run does)
@@ -159,6 +169,7 @@ def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collect
             candidates = probe_many(list(accounts.values()))
             providers = provider_future.result()
 
+    row_cache = _UncappedCache(cache) if cached_only else cache
     rows: list[DashboardRow] = []
     resolved = []
     relogin_count = 0
@@ -172,7 +183,7 @@ def _collect(paths: Paths, here: Path, *, cached_only: bool = False) -> _Collect
                     relogin_count += 1
                 rows.append(relogin_row(c.account, "token invalid (401/403)"))
                 continue
-            filled, row = row_from_cache(c, cache, probe_error=err)
+            filled, row = row_from_cache(c, row_cache, probe_error=err)
             if filled is not None:
                 rows.append(row)
                 resolved.append(filled)
