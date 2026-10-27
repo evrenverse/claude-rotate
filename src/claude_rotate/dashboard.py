@@ -429,6 +429,9 @@ _STATUS_LABELS = {
 
 
 _UNUSABLE_STYLE = "grey35"
+# Tag on accounts reserved for another directory: shown in full colour (their
+# quota is real), but marked so the eye knows they won't be picked here.
+_NOT_HERE_STYLE = "magenta"
 
 
 def _greyed(t: Text) -> Text:
@@ -713,6 +716,9 @@ def _label_text(row: DashboardRow, *, chosen: str | None, active: str | None) ->
         sub = "disabled"
     if sub:
         t.append(f"\n   {sub}", style="dim")
+    if not row.allowed:
+        t.append(" · " if sub else "\n   ", style="dim")
+        t.append("not here", style=_NOT_HERE_STYLE)
     indicator = session_indicator(row.session_load)
     if indicator:
         t.append(f"\n   {indicator}", style="dim cyan")
@@ -833,7 +839,7 @@ def _render_table(
             for header, width, justify in columns:
                 table.add_column(header, no_wrap=True, width=width, justify=justify)
             for row, lbl, c5, c7, sc7, sub in islice(it, len(section.rows)):
-                greyed = is_unusable(row, now=now) or not row.allowed
+                greyed = is_unusable(row, now=now)
                 if row.status in _STATUS_LABELS:
                     # The status label stays loud even when the row is greyed out —
                     # it asks for action.
@@ -896,6 +902,9 @@ def _card_text(
         header.append(f" · {plan}", style="dim")
     if row.account.disabled:
         header.append(" · disabled", style="dim")
+    if not row.allowed:
+        header.append(" · ", style="dim")
+        header.append("not here", style=_NOT_HERE_STYLE)
     exp_txt, exp_style = fmt_sub_expiry(
         row.account.effective_expires_at,
         status=row.account.subscription_status,
@@ -977,7 +986,7 @@ def _render_cards(
         )
         table.add_column("", no_wrap=True, width=inner)
         for row, c5, c7, sc7 in islice(it, len(section.rows)):
-            greyed = is_unusable(row, now=now) or not row.allowed
+            greyed = is_unusable(row, now=now)
             table.add_row(
                 _card_text(
                     row,

@@ -1495,7 +1495,7 @@ def test_status_json_keeps_zero_scoped() -> None:
     assert status_json([row], chosen="main")["accounts"][0]["w7_scoped"][0]["pct"] == 0.2
 
 
-def test_not_allowed_rows_are_greyed() -> None:
+def test_not_allowed_rows_keep_colours_and_carry_a_not_here_tag() -> None:
     from dataclasses import replace
 
     rows = [replace(_row(_acc("blocked")), allowed=False), _row(_acc("fresh"))]
@@ -1503,10 +1503,22 @@ def test_not_allowed_rows_are_greyed() -> None:
     render_dashboard(rows, chosen="fresh", console=console, now=_FIXED_NOW)
     lines = [ln for ln in console.file.getvalue().splitlines() if "│" in ln]
     blocked = next(ln for ln in lines if "blocked" in ln)
-    fresh = next(ln for ln in lines if "fresh" in ln)
-    assert "38;2;" not in blocked  # gradient colours stripped
-    assert "38;5;240" in blocked  # grey35 applied
-    assert "38;2;" in fresh
+    assert "38;2;" in blocked  # gradient colours kept
+    assert "38;5;240" not in blocked  # not greyed out
+    tagged = [ln for ln in lines if "not here" in ln]
+    assert len(tagged) == 1  # only the blocked account's plan line
+    assert "\x1b[35m" in tagged[0]  # magenta tag
+
+
+def test_not_allowed_card_carries_a_not_here_tag() -> None:
+    from dataclasses import replace
+
+    rows = [replace(_row(_acc("blocked")), allowed=False), _row(_acc("fresh"))]
+    console = _plain_console(60)  # narrow: cards layout
+    render_dashboard(rows, chosen="fresh", console=console, now=_FIXED_NOW)
+    header = next(ln for ln in console.file.getvalue().splitlines() if "blocked" in ln)
+    assert "not here" in header
+    assert not any("not here" in ln for ln in console.file.getvalue().splitlines() if "fresh" in ln)
 
 
 def test_long_status_note_wraps_instead_of_truncating() -> None:

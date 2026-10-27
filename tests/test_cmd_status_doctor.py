@@ -1122,7 +1122,7 @@ def test_status_dashboard_shows_group_boxes_context_and_isolation_warning(
     shown = short_path(bound)  # ~-shortened when the tmp dir lives under $HOME
     assert f"{shown} · group k · next pick " in out
     assert f" k · {shown}" in out
-    assert " o · " in out and " · not allowed here" in out  # o's box is greyed here
+    assert " o · " in out and " · not allowed here" in out  # o's accounts can't run here
     assert " ungrouped · not allowed here" not in out  # free accounts may run here
     assert "session isolation" not in out
     assert "Account groups need session isolation" in render(

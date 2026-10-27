@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`status` no longer greys out accounts that are not allowed in the current
+  directory.** They keep their colours and carry a `not here` tag instead; greying
+  stays reserved for accounts that can't be picked anywhere right now.
+
 ## [0.9.0] - 2026-10-27
 
 ### Added
