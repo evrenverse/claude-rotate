@@ -40,7 +40,12 @@ from claude_rotate.config import (
     FORECAST_WINDOW_5H_SECONDS,
     FORECAST_WINDOW_7D_SECONDS,
 )
-from claude_rotate.dashboard import DashboardRow, session_indicator, visible_scoped
+from claude_rotate.dashboard import (
+    DashboardRow,
+    session_indicator,
+    visible_scoped,
+    window_absent,
+)
 from claude_rotate.insights import (
     clock_at,
     compute_forecast,
@@ -99,6 +104,8 @@ def _render_cards(
     (``compute_forecast >= 100``), the clock and relative duration at which usage
     hits 100%. It collapses to ``→XX% —`` when the window resets first, a lone
     ``—`` when there is no trend yet, or ``reached`` once usage is already ≥100%.
+    A window the account does not have (some plans carry no 5h window) is a single
+    ``no limit`` line with no bar and no sub-line.
 
     Both line types share one column grid (pct / clock / relative widths span
     both), so the forecast % stacks under the current % and the limit-ETA clock
@@ -223,13 +230,18 @@ def _render_cards(
                 )
             )
 
-        pw = max(len(s) for c in cells for s in (c.pct_str, c.forecast) if s is not None)
-        cw = max(len(s) for c in cells for s in (c.reset_clock, c.eta_clock) if s is not None)
-        rel_vals = [s for c in cells for s in (c.reset_rel, c.eta_rel) if s is not None]
+        # A window the account does not have is a lone "no limit" line outside the grid.
+        sized = [c for c in cells if not window_absent(row, c.pct)]
+        pw = max(len(s) for c in sized for s in (c.pct_str, c.forecast) if s is not None)
+        cw = max(len(s) for c in sized for s in (c.reset_clock, c.eta_clock) if s is not None)
+        rel_vals = [s for c in sized for s in (c.reset_rel, c.eta_rel) if s is not None]
         rw = max((len(s) for s in rel_vals), default=0)
 
         rows_txt = [head]
         for c in cells:
+            if window_absent(row, c.pct):
+                rows_txt.append(f"{c.label:<{label_width}}  no limit")
+                continue
             fact_tail = f"{c.reset_clock:>{cw}} {c.reset_rel:>{rw}}".rstrip()
             if c.capped:
                 # Append after the right-justified clock/rel field so the wide ⌛

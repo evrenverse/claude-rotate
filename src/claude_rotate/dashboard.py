@@ -158,6 +158,16 @@ class DashboardRow:
     allowed: bool = True
 
 
+def window_absent(row: DashboardRow, pct: float | None) -> bool:
+    """Whether a window does not exist for this account (e.g. plans without a 5h window).
+
+    An ok row always carries at least one window — the probe fails without any and
+    the cache fallback rejects entries holding none — so a missing one on an ok row
+    is not unknown: Anthropic does not apply that limit to the account.
+    """
+    return row.status == "ok" and pct is None
+
+
 @dataclass(frozen=True)
 class Section:
     """One box of the dashboard; ``title`` is ``None`` when there are no groups."""
@@ -479,6 +489,14 @@ class _WindowCell:
 
 
 _NA_CELL = _WindowCell(None, "N/A", "", "", None, "", "")
+_NO_LIMIT_CELL = _WindowCell(None, "no limit", "", "", None, "", "")
+
+
+def _mark_absent(rows: list[DashboardRow], cells: list[_WindowCell]) -> list[_WindowCell]:
+    """Swap the N/A of windows the account does not have for ``no limit``."""
+    return [
+        _NO_LIMIT_CELL if window_absent(r, c.pct) else c for r, c in zip(rows, cells, strict=True)
+    ]
 
 
 _WindowData = tuple[float | None, int, bool, int | None, float | None]
@@ -561,12 +579,13 @@ def _window_cells(
     show_forecast: bool,
 ) -> list[_WindowCell]:
     """Build one column of cells; the weekday slot is shared per column."""
-    return _cells_from_datas(
+    cells = _cells_from_datas(
         _window_datas(rows, window, now_local=now_local),
         window_secs,
         now_local=now_local,
         show_forecast=show_forecast,
     )
+    return _mark_absent(rows, cells)
 
 
 def _week_and_scoped_cells(
@@ -602,12 +621,17 @@ def _week_and_scoped_cells(
     )
     it = iter(cells[len(rows) :])
     scoped_cells = [[(s.label, next(it)) for s in scoped] for scoped in shown]
-    return cells[: len(rows)], scoped_cells
+    return _mark_absent(rows, cells[: len(rows)]), scoped_cells
+
+
+def _pct_width(cells: list[_WindowCell]) -> int:
+    """Width of the pct column; placeholders (N/A, no limit) print unpadded, so skip them."""
+    return max([len(_ETA_MARK), *(len(c.pct_str) for c in cells if c.pct is not None)])
 
 
 def _col_widths(cells: list[_WindowCell], *, include_rel: bool) -> tuple[int, int, int]:
     """(pct, clock, rel) column widths shared by fact line and sub-line."""
-    pw = max((len(s) for c in cells for s in (c.pct_str, _ETA_MARK) if s), default=3)
+    pw = _pct_width(cells)
     cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
     rw = 0
     if include_rel:
@@ -630,7 +654,7 @@ def _window_text(
     if label:
         t.append(label, style=label_style)
     if c.pct is None:
-        t.append("N/A", style="grey50")
+        t.append(c.pct_str, style="grey50")
         return t
     t.append_text(gradient_bar(c.pct, width=bar_w))
     t.append("  ")
@@ -930,7 +954,7 @@ def _card_text(
     if c7.pct is not None:
         windows += [(lbl, sc) for lbl, sc in scoped if sc.pct is not None]
     cells = [c for _, c in windows]
-    pw = max((len(s) for c in cells for s in (c.pct_str, _ETA_MARK) if s), default=3)
+    pw = _pct_width(cells)
     cw = max((len(s) for c in cells for s in (c.clock, c.eta_clock) if s), default=0)
     rw = max((len(s) for c in cells for s in (c.rel, c.eta_rel) if s), default=0)
     label_w = max(len(lbl) for lbl, _ in windows) + 2

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Accounts without a 5h window read `no limit`, not `N/A`.** Anthropic has dropped
+  the 5h window from some plans; their probes carry only the weekly limit. Rotation
+  already treated such an account as never walled on 5h, but the dashboard and
+  `--report` showed the same `N/A` as for usage that could not be fetched. `N/A` now
+  means unknown only.
+
 ### Fixed
 
 - **Searching transcripts no longer reads them once per account.** Every account's

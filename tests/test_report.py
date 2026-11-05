@@ -274,6 +274,15 @@ def test_error_row_surfaces_status_not_numbers() -> None:
     assert "N/A" in report  # dead row's percentages
 
 
+def test_window_the_account_lacks_is_one_no_limit_line() -> None:
+    rows = [_row("a", h5=None, w7=46.0, w7_reset=5 * _DAY)]
+    report = build_report(rows, chosen="a", active="a", now=NOW)
+    lines = report.splitlines()
+    i = lines.index("5h    no limit")
+    assert lines[i + 1].startswith("week  ")  # no bar, no forecast sub-line
+    assert "N/A" not in report
+
+
 def test_expiry_warns_under_seven_days() -> None:
     soon = datetime(2026, 6, 8, 0, 40, tzinfo=UTC)  # 3 days out
     rows = [_row("a", h5=10.0, w7=20.0, h5_reset=_HOUR, w7_reset=_DAY, expires=soon)]

@@ -76,6 +76,20 @@ def test_fetch_usage_429_returns_rate_limited() -> None:
     assert r.error == "rate_limited"
 
 
+def test_fetch_usage_without_5h_window_keeps_weekly() -> None:
+    """Some plans carry no 5h window any more: only the 7d headers come back."""
+    headers = {k: v for k, v in _rate_limit_headers().items() if "-5h-" not in k}
+    with patch(
+        "claude_rotate.probe.urllib.request.urlopen",
+        return_value=_make_response(200, headers=headers),
+    ):
+        r = fetch_usage("sk-ant-oat01-zzz", now=_NOW)
+    assert r.ok
+    assert r.h5_pct is None
+    assert r.h5_reset_secs == 0
+    assert r.w7_pct == 96.0
+
+
 def test_fetch_usage_429_with_rate_limit_headers_returns_usage() -> None:
     """The inference endpoint returns quota headers even when the account is capped."""
     import urllib.error

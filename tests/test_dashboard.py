@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 
+import pytest
 from rich.console import Console
 from rich.text import Text
 
@@ -599,6 +600,20 @@ def test_render_narrow_terminal_folds_into_cards() -> None:
     assert "main · Max-20" in out
     assert "5h" in out
     assert "week" in out
+
+
+@pytest.mark.parametrize("width", [120, 60])  # wide table, narrow cards
+def test_render_window_the_account_lacks_reads_no_limit(width: int) -> None:
+    rows = [
+        _row(_acc("main"), h5_pct=None, w7_pct=46.0),
+        _row(_acc("lost"), h5_pct=None, w7_pct=None, status="no_data"),
+    ]
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=width)
+    render_dashboard(rows, chosen="main", console=console)
+    out = console.file.getvalue()
+    assert "no limit" in out
+    assert "46%" in out
+    assert "N/A" in out  # unknown usage (no data) keeps its own marker
 
 
 def test_render_cards_mode_shows_error_status() -> None:

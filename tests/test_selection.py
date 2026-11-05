@@ -88,6 +88,15 @@ def test_is_usable_none_values_treated_as_ok() -> None:
     assert is_usable(_cand(h5=None, w7=None))
 
 
+def test_account_without_5h_window_is_never_5h_gated() -> None:
+    # No 5h window means no 5h wall: it beats an equal account walling its 5h window.
+    walled = replace(_cand(h5=90.0, w7=50.0), account=_acc(name="walled"))
+    no_5h = replace(_cand(h5=None, w7=50.0, h5_secs=0), account=_acc(name="no5h"))
+    best, wait = pick_best([walled, no_5h], now=FIXED_NOW)
+    assert wait is None
+    assert best.account.name == "no5h"
+
+
 def test_next_available_zero_when_usable() -> None:
     assert next_available_seconds(_cand(h5=10.0, w7=10.0)) == 0
 
