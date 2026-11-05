@@ -146,3 +146,14 @@ def test_cleanup_removes_isolation_artifacts(tmp_path: Path) -> None:
     assert cleanup.execute(paths, assume_yes=True) == 0
     assert not paths.config_file.exists()
     assert not paths.account_configs_dir.exists()
+
+
+def test_cleanup_removes_enter_only_account_configs(tmp_path: Path) -> None:
+    from claude_rotate.account_config_dir import ensure_account_config_dir
+
+    paths = _paths(tmp_path)
+    _seed(paths)
+    ensure_account_config_dir(paths, "main", home_claude=tmp_path / "no-home")
+
+    assert cleanup.execute(paths, assume_yes=True) == 0
+    assert not paths.config_dir.exists()

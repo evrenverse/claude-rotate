@@ -56,6 +56,10 @@ def execute(paths: Paths, *, assume_yes: bool) -> int:
             print("  Aborted.", file=sys.stderr)
             return 1
 
+    # configs/ is enter-only (account_config_dir); rmtree has to list it.
+    configs = paths.account_configs_dir
+    if configs.is_dir() and not configs.is_symlink():
+        configs.chmod(0o700)
     for p in existing:
         shutil.rmtree(p)
 

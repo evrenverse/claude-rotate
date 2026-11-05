@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Searching transcripts no longer reads them once per account.** Every account's
+  config dir mirrors the same `~/.claude`, so a glob over `configs/*/projects` (as
+  agents and scripts write it) read every transcript once per account. The `configs`
+  dir is now enter-only: its account dirs can't be listed, while the paths Claude
+  Code uses keep working. `cleanup` makes it listable again before deleting it.
+
 ## [0.9.1] - 2026-10-27
 
 ### Changed

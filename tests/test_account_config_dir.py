@@ -74,3 +74,16 @@ def test_prunes_old_diverged_backups(rotate_dir: Path, tmp_path: Path) -> None:
     ensure_account_config_dir(paths(), "matri", home_claude=hc)
     assert not old.exists()  # pruned (> 7 days old)
     assert recent.exists()  # within window, kept
+
+
+def test_configs_dir_is_enter_only(rotate_dir: Path, tmp_path: Path) -> None:
+    hc = _fake_home_claude(tmp_path / "home")
+    (hc / "projects" / "p").mkdir()
+    (hc / "projects" / "p" / "s.jsonl").write_text("{}\n")
+    ensure_account_config_dir(paths(), "alice", home_claude=hc)
+    ensure_account_config_dir(paths(), "bob", home_claude=hc)
+
+    configs = paths().account_configs_dir
+    assert (configs.stat().st_mode & 0o777) == 0o311
+    assert list(configs.glob("*/projects/*/*.jsonl")) == []  # no per-account copies
+    assert (configs / "alice" / "projects" / "p" / "s.jsonl").read_text() == "{}\n"

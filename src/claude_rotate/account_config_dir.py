@@ -51,6 +51,9 @@ def ensure_account_config_dir(paths: Paths, account_name: str, *, home_claude: P
     target = paths.account_configs_dir / account_name
     target.mkdir(parents=True, exist_ok=True)
     target.chmod(0o700)
+    # Enter-only, no listing: every account dir mirrors the same ~/.claude, so a glob over
+    # configs/* would read the shared projects/ (all transcripts) once per account.
+    paths.account_configs_dir.chmod(0o311)
 
     desired: dict[str, Path] = {}
     # If ~/.claude is absent (essentially only on a brand-new machine before

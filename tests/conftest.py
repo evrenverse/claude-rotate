@@ -13,6 +13,14 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _listable_configs_dirs(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Production makes configs/ enter-only; pytest can only prune listable temp dirs."""
+    yield
+    for p in list(tmp_path_factory.getbasetemp().rglob("configs")):
+        p.chmod(0o700)
+
+
 @pytest.fixture
 def rotate_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Disposable CLAUDE_ROTATE_DIR for a single test."""
